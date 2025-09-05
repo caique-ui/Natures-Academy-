@@ -1,0 +1,132 @@
+:root {
+    --bg: #0f172a;
+    --panel: #111827;
+    --muted: #94a3b8;
+    --accent: #22c55e;
+    --fg: #e5e7eb;
+    --bubble: #1f2937;
+    --user: #0b5;
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.5 system-ui, Segoe UI, Roboto, Ubuntu
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 16px
+}
+
+.topbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--panel);
+    padding: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 1px solid #222
+}
+
+.brand {
+    font-weight: 700
+}
+
+.btn {
+    border: none;
+    padding: 10px 14px;
+    border-radius: 12px;
+    cursor: pointer
+}
+
+.btn.primary {
+    background: var(--accent);
+    color: #062
+}
+
+.btn.secondary {
+    background: #334155;
+    color: #cbd5e1
+}
+
+.chatwrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 80vh
+}
+
+.messages {
+    flex: 1;
+    overflow: auto;
+    background: #0b1220;
+    border: 1px solid #1e293b;
+    border-radius: 16px;
+    padding: 14px;
+    scroll-behavior: smooth
+}
+
+.bubble {
+    max-width: 80%;
+    padding: 12px 14px;
+    border-radius: 16px;
+    margin: 8px 0;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, .25)
+}
+
+.bubble .role {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 6px
+}
+
+.bubble .content {
+    white-space: pre-wrap
+}
+
+.bubble.bot {
+    background: var(--bubble)
+}
+
+.bubble.user {
+    background: #052e2b;
+    border: 1px solid #0a7;
+    margin-left: auto
+}
+
+.empty {
+    color: var(--muted)
+}
+
+.composer {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end
+}
+
+.textarea {
+    flex: 1;
+    min-height: 64px;
+    resize: vertical;
+    background: #0b1220;
+    border: 1px solid #1e293b;
+    color: var(--fg);
+    padding: 10px;
+    border-radius: 12px
+}
+
+.foot {
+    color: #94a3b8;
+    text-align: center;
+    padding: 16px
+}

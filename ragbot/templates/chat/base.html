@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drive RAG Chat</title>
+  <link rel="stylesheet" href="/static/chat/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">Drive RAG Chat</div>
+  <form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
+    <button class="btn secondary" title="Clear session chat">Reset</button>
+  </form>
+</header>
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+<footer class="foot">No data is stored beyond your current session.</footer>
+</body>
+</html>

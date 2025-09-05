@@ -1,0 +1,27 @@
+{% extends 'chat/base.html' %}
+{% block content %}
+<div class="chatwrap">
+  <div id="messages" class="messages">
+    {% for m in convo %}
+      {% if m.role == 'user' %}
+      <div class="bubble user"><div class="role">You</div><div class="content">{{ m.content|linebreaksbr }}</div></div>
+      {% else %}
+      <div class="bubble bot"><div class="role">Assistant</div><div class="content">{{ m.content|linebreaksbr }}</div></div>
+      {% endif %}
+    {% empty %}
+      <div class="empty">Ask anything about the indexed Google Drive folder.</div>
+    {% endfor %}
+  </div>
+
+  <form action="" method="post" class="composer">
+    {% csrf_token %}
+    {{ form.message }}
+    <button class="btn primary" type="submit">Send</button>
+  </form>
+</div>
+<script>
+  // Auto-scroll to bottom
+  const msg = document.getElementById('messages');
+  if (msg) { msg.scrollTop = msg.scrollHeight; }
+</script>
+{% endblock %}
