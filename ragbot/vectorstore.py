@@ -1,4 +1,3 @@
-# chat/vectorstore.py — FAISS index + JSONL docstore with memory optimization
 import os
 import json
 import faiss

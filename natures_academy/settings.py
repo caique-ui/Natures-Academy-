@@ -37,7 +37,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware'
 ]
 
-ROOT_URLCONF = 'lamatic_rag.urls'
+ROOT_URLCONF = 'natures_academy.urls'
 
 TEMPLATES = [
     {
@@ -55,7 +55,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'lamatic_rag.wsgi.application'
+WSGI_APPLICATION = 'natures_academy.wsgi.application'
 
 DATABASES = {
     'default': {
@@ -74,21 +74,15 @@ STATIC_ROOT = os.path.join (BASE_DIR, 'media') # a different directory from 'sta
 STATICFILES_DIRS = [
     os.path.join (BASE_DIR, 'static'), # the 'static' directory at the project root
 ]
-#STATIC_VERSION = int(time.time())
-#STATICFILES_DIRS = [BASE_DIR / "static" / "chat" / "static"]
-
-#LAMATIC_API_KEY = env("LAMATIC_API_KEY")
-#GOOGLE_DRIVE_CREDENTIALS_PATH = os.path.join(BASE_DIR, env("GOOGLE_DRIVE_CREDENTIALS_PATH"))
-#RAG_INDEX_DIR = os.path.join(BASE_DIR, env("RAG_INDEX_DIR", default='rag_index'))
 
 # RAG settings
-VECTORSTORE_PATH =  os.getenv("VECTORSTORE_PATH", str(BASE_DIR / ".data/index.faiss"))
-DOCSTORE_PATH =  os.getenv("DOCSTORE_PATH", str(BASE_DIR / ".data/docstore.jsonl"))
-OPENAI_CHAT_MODEL =  os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-OPENAI_EMBED_MODEL =  os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+VECTORSTORE_PATH =  os.getenv("VECTORSTORE_PATH")
+DOCSTORE_PATH =  os.getenv("DOCSTORE_PATH")
+OPENAI_CHAT_MODEL =  os.getenv("OPENAI_CHAT_MODEL")
+OPENAI_EMBED_MODEL =  os.getenv("OPENAI_EMBED_MODEL")
 
 # Google Drive
-GDRIVE_TOKEN_PATH =  os.getenv("GDRIVE_TOKEN_PATH", str(BASE_DIR / ".secrets/token.json"))
-GDRIVE_SERVICE_ACCOUNT_PATH =  os.getenv("GDRIVE_SERVICE_ACCOUNT_PATH", str(BASE_DIR / ".secrets/lamaticapi-b6d26508131d.json"))
+GDRIVE_TOKEN_PATH =  os.getenv("GDRIVE_TOKEN_PATH")
+GDRIVE_SERVICE_ACCOUNT_PATH =  os.getenv("GDRIVE_SERVICE_ACCOUNT_PATH")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
