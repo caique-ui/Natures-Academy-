@@ -26,11 +26,14 @@
 
   <form id="chat-form" class="composer">
     {% csrf_token %}
-    {{ form.message }}
-    <button id="send-btn" class="btn primary" type="submit">
-      <span id="send-icon">▶</span>
-      <span id="stop-icon" style="display: none;">⏹</span>
-    </button>
+    <div class="textarea-container">
+        {{ form.message }}
+        <button id="send-btn" class="btn-inside" type="submit">
+            <span id="send-icon"><i class="fa-solid fa-paper-plane"></i></span>
+            <span id="stop-icon" style="display: none;"><i class="fa-solid fa-stop"></i></span>
+        </button>
+    </div>
+    <div class="composer-note">Nature's Academy early learning</div>
   </form>
 </div>
 <div id="page-loader" style="display: none;">
@@ -48,9 +51,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Auto-scroll to bottom function
   function scrollToBottom() {
-    if (messagesContainer) {
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    const bubbles = messagesContainer.querySelectorAll('.bubble');
+    const lastBubble = bubbles[bubbles.length - 1];
+    if (lastBubble) {
+      lastBubble.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
+    
   }
 
   // Initial scroll to bottom
@@ -61,14 +67,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const roleLabel = role === 'user' ? 'You' : 'Assistant';
     const bubbleClass = role === 'user' ? 'bubble user' : 'bubble bot';
     
+    // Escape HTML and then replace newlines
+    const escapedContent = content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/\n/g, '<br>');
+    
     return `
       <div class="${bubbleClass}">
         <div class="role">${roleLabel}</div>
-        <div class="content">${content.replace(/\n/g, '<br>')}</div>
+        <div class="content">${escapedContent}</div>
       </div>
     `;
   }
-
   function showPageLoader(show) {
     const loader = document.getElementById('page-loader');
     if (loader) {

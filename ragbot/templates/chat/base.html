@@ -4,19 +4,24 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Nature's Academy</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/chat/styles.css" />
   <link rel="shortcut icon" href="/static/images/favicon.ico" type="image/x-icon">
+  <link href="/static/fontawesome/css/fontawesome.css" rel="stylesheet" />
+  <link href="/static/fontawesome/css/brands.css" rel="stylesheet" />
+  <link href="/static/fontawesome/css/solid.css" rel="stylesheet" />
+  <link href="/static/fontawesome/css/sharp-thin.css" rel="stylesheet" />
+  <link href="/static/fontawesome/css/sharp-duotone-thin.css" rel="stylesheet" />
 </head>
 <body>
 <header class="topbar">
   <div class="brand">Nature's Academy</div>
   <form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
-    <button class="btn secondary" title="Clear session chat">Reset</button>
+    <button class="btn secondary" title="Clear Conversation">CLEAR Conversation </button>
   </form>
 </header>
 <main class="container">
   {% block content %}{% endblock %}
 </main>
-<!--<footer class="foot">No data is stored beyond your current session.</footer>-->
 </body>
 </html>
