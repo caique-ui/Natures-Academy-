@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Natures Academy</title>
+  <title>Nature's Academy</title>
   <link rel="stylesheet" href="/static/chat/styles.css" />
+  <link rel="shortcut icon" href="/static/images/favicon.ico" type="image/x-icon">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">Natures Academy</div>
+  <div class="brand">Nature's Academy</div>
   <form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
     <button class="btn secondary" title="Clear session chat">Reset</button>
   </form>
@@ -16,6 +17,6 @@
 <main class="container">
   {% block content %}{% endblock %}
 </main>
-<footer class="foot">No data is stored beyond your current session.</footer>
+<!--<footer class="foot">No data is stored beyond your current session.</footer>-->
 </body>
 </html>

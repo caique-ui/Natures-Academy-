@@ -3,5 +3,5 @@ from django.urls import path, include
 
 urlpatterns = [
     #path('admin/', admin.site.urls),
-    path('ragbot/', include('ragbot.urls')),
+    path('', include('ragbot.urls')),
 ]

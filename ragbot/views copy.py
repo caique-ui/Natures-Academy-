@@ -1,3 +1,4 @@
+# chat/views.py — enhanced chat UI + RAG answer with better context handling
 from django.shortcuts import render, redirect
 from django.views.decorators.http import require_http_methods
 from django.conf import settings
@@ -40,7 +41,6 @@ SYSTEM_PROMPT = (
     "Your goal is to be a faithful representation of the document content, not to improve or interpret it."
 )
 
-
 client = OpenAI()
 
 @require_http_methods(["GET", "POST"])
@@ -55,26 +55,54 @@ def chat_view(request):
         if user_msg:
             convo.append({"role": "user", "content": user_msg})
 
-            # Retrieve
+            # Retrieve with higher k value to get more context
             store = get_store()
-            retrieved = store.search(user_msg, k=5) if store.index.ntotal > 0 else []
+            retrieved = store.search(user_msg, k=10) if store.index.ntotal > 0 else []
+            
+            # Build more comprehensive context
             context_blocks = []
+            seen_sources = set()
+            
             for score, meta in retrieved:
-                snippet = meta.get("text", "")[:1200]
-                source = meta.get("source_name", "?")
-                context_blocks.append(f"[score={score:.3f}] {snippet}\n(Source: {source})")
-            context_text = "\n\n".join(context_blocks) if context_blocks else "(no matching context retrieved)"
+                # Use longer snippets to preserve formatting
+                snippet = meta.get("text", "")[:2000]  # Increased from 1200
+                source = meta.get("source_name", "Unknown")
+                chunk_num = meta.get("chunk", 0)
+                
+                # Add source tracking to avoid repetition
+                source_key = f"{source}_{chunk_num}"
+                if source_key not in seen_sources:
+                    seen_sources.add(source_key)
+                    
+                    # Better formatting for context
+                    context_blocks.append(
+                        f"=== DOCUMENT EXCERPT ===\n"
+                        f"Source: {source} (Chunk {chunk_num})\n"
+                        f"Relevance Score: {score:.3f}\n"
+                        f"Content:\n{snippet}\n"
+                        f"=== END EXCERPT ===\n"
+                    )
+            
+            context_text = "\n".join(context_blocks) if context_blocks else "No relevant context found in the documents."
 
+            # Enhanced message structure
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-                {"role": "system", "content": f"Context from Drive:\n\n{context_text}"},
+                {
+                    "role": "user", 
+                    "content": f"User Question: {user_msg}\n\n"
+                               f"Please answer this question using ONLY the document context provided below. "
+                               f"Maintain exact formatting, wording, and structure from the original documents.\n\n"
+                               f"DOCUMENT CONTEXT:\n{context_text}"
+                },
             ]
 
+            # Use higher temperature for more faithful reproduction
             resp = client.chat.completions.create(
                 model=settings.OPENAI_CHAT_MODEL,
                 messages=messages,
-                temperature=0.2,
+                temperature=0.1,  # Lower temperature for more consistent responses
+                max_tokens=2000,  # Allow longer responses to preserve detail
             )
             answer = resp.choices[0].message.content
             convo.append({"role": "assistant", "content": answer})

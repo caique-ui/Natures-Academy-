@@ -1,11 +1,13 @@
 :root {
-    --bg: #0f172a;
-    --panel: #111827;
-    --muted: #94a3b8;
-    --accent: #22c55e;
-    --fg: #e5e7eb;
-    --bubble: #1f2937;
-    --user: #0b5;
+    --bg: #0b2941; /* Primary dark blue for background */
+    --panel: #193653; /* Medium gray for panels, good contrast with bg */
+    --muted: #879fac; /* Muted green-gray for subtle elements */
+    --accent: #8B9D8D; /* Using muted green-gray as accent for cohesion */
+    --fg: #FFFFFF; /* White for foreground text, high contrast on dark bg */
+    --bubble: #7eac9a; /* Muted green-gray for chat bubbles, consistent with theme */
+    --user: #FFFFFF; /* White for user elements, ensuring readability */
+    --assistant: #2d3e4a;
+    --question-box: #435a69
 }
 
 * {
@@ -20,9 +22,9 @@ body {
 }
 
 .container {
-    max-width: 900px;
+    max-width: 1000px;
     margin: 0 auto;
-    padding: 16px
+    padding: 16px 16px 0 16px
 }
 
 .topbar {
@@ -39,7 +41,14 @@ body {
 }
 
 .brand {
-    font-weight: 700
+    font-weight: 700;
+    background: url("../images/logo.png") no-repeat;
+    background-size: 50px;
+    height: 50px;
+    padding-left: 70px;
+    display: flex;
+    align-items: center; /* Centers text vertically */
+    line-height: 1;
 }
 
 .btn {
@@ -68,12 +77,13 @@ body {
 
 .messages {
     flex: 1;
-    overflow: auto;
+    /*overflow: auto;
     background: #0b1220;
     border: 1px solid #1e293b;
-    border-radius: 16px;
+    border-radius: 16px;*/
     padding: 14px;
-    scroll-behavior: smooth
+    scroll-behavior: smooth;
+    height: 80vh;
 }
 
 .bubble {
@@ -81,13 +91,14 @@ body {
     padding: 12px 14px;
     border-radius: 16px;
     margin: 8px 0;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, .25)
+    /*box-shadow: 0 2px 12px rgba(0, 0, 0, .25)*/
 }
 
 .bubble .role {
-    font-size: 12px;
+    font-size: 14px;
     color: var(--muted);
-    margin-bottom: 6px
+    margin-bottom: 6px;
+    font-weight: bold;
 }
 
 .bubble .content {
@@ -95,17 +106,26 @@ body {
 }
 
 .bubble.bot {
-    background: var(--bubble)
+    background: #273549;
 }
 
 .bubble.user {
-    background: #052e2b;
-    border: 1px solid #0a7;
+    background: var(--bubble);
     margin-left: auto
 }
 
+.bubble.user .role {
+    color: var(--user);
+}
+
 .empty {
-    color: var(--muted)
+    color: var(--muted);
+    text-align: center;   
+    display: flex;
+    flex-direction: column;   /* stack items vertically */
+    justify-content: center;  /* vertical alignment */
+    align-items: center;      /* horizontal alignment */
+    min-height: 75vh;        /* take full screen height */
 }
 
 .composer {
@@ -118,15 +138,189 @@ body {
     flex: 1;
     min-height: 64px;
     resize: vertical;
-    background: #0b1220;
-    border: 1px solid #1e293b;
-    color: var(--fg);
+    background: var(--question-box);
+    border: 0px solid #1e293b;
+    color: var(--user);
     padding: 10px;
-    border-radius: 12px
+    border-radius: 12px;
+    font-family: Arial, Helvetica, sans-serif;
+    resize: none;
+    font-size: 16px;
+}
+
+.textarea:focus {
+  outline: none !important;
+  border: 0px solid transparent !important;
+  box-shadow: none !important;
+}
+
+.textarea::placeholder {
+    color: var(--muted); /* Uses your brand gray */
+    opacity: 1; /* Ensures full opacity across browsers */
+}
+
+/* For older browsers */
+.textarea::-webkit-input-placeholder {
+    color: var(--muted);
+}
+
+.textarea::-moz-placeholder {
+    color: var(--muted);
+    opacity: 1;
+}
+
+.textarea:-ms-input-placeholder {
+    color: var(--muted);
 }
 
 .foot {
     color: #94a3b8;
     text-align: center;
     padding: 16px
+}
+
+/* Minimal CSS additions to enhance your existing dark theme */
+
+/* Enable proper scrolling for messages container */
+.messages {
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+
+}
+
+/* Custom scrollbar that matches your dark theme */
+.messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 3px;
+  opacity: 0.7;
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* Smooth animation for new messages */
+.bubble {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Ensure composer stays accessible at bottom */
+.composer {
+  position: sticky;
+  bottom: 0px;
+  background: var(--bg);
+  padding-top: 10px;
+  z-index: 5;
+  padding-bottom: 20px;
+  /*border-top: 1px solid #222;*/
+}
+
+/* Loading state styling that matches your theme */
+.btn.primary:disabled {
+  background: var(--muted) !important;
+  color: var(--bg) !important;
+  cursor: not-allowed;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .chatwrap {
+    min-height: calc(100vh - 140px); /* Account for header + footer */
+  }
+  
+  .messages {
+    height: calc(100vh - 220px); /* Account for all UI elements */
+  }
+  
+  /* Prevent iOS zoom on input focus */
+  .textarea {
+    font-size: 16px !important;
+  }
+}
+
+#send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 12px;
+}
+
+#send-icon, #stop-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+#page-loader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loader-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(15, 23, 42, 0.8); /* Semi-transparent dark overlay */
+  backdrop-filter: blur(1px);
+}
+
+.loader-spinner {
+    width: 50px;
+    height: 50px;
+    background: url("../images/logo.png") no-repeat center;
+    background-size: contain;
+    border: none; /* Remove the rotating border */
+    border-radius: 0; /* Remove border radius */
+    animation: none; /* Remove rotation animation */
+}
+
+/* Optional: Add a subtle pulsing effect instead of rotation */
+.loader-spinner {
+    width: 50px;
+    height: 50px;
+    background: url("../images/logo.png") no-repeat center;
+    background-size: contain;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { 
+        opacity: 1; 
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 0.7; 
+        transform: scale(1.05);
+    }
 }
