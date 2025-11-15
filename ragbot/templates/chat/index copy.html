@@ -1,0 +1,226 @@
+{% extends 'chat/base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="chatwrap">
+  <div id="messages" class="messages">
+    {% for m in convo %}
+      {% if m.role == 'user' %}
+      <div class="bubble user">
+        <div class="role">You</div>
+        <div class="content">{{ m.content|linebreaksbr }}</div>
+      </div>
+      {% else %}
+      <div class="bubble bot">
+        <div class="role">Assistant</div>
+        <div class="content">{{ m.content|linebreaksbr }}</div>
+      </div>
+      {% endif %}
+    {% empty %}
+      <div class="empty">
+        <img src="/static/images/logo.png" alt="Nature's Academy" title="Nature's Academy" width="100"/>
+        <h1>Welcome! to Nature's Academy</h1>
+        Ask me anything related to Natures Academy.</div>
+    {% endfor %}
+  </div>
+
+  <form id="chat-form" class="composer">
+    {% csrf_token %}
+    <div class="textarea-container">
+        {{ form.message }}
+        <button id="send-btn" class="btn-inside" type="submit">
+            <span id="send-icon"><i class="fa-solid fa-paper-plane"></i></span>
+            <span id="stop-icon" style="display: none;"><i class="fa-solid fa-stop"></i></span>
+        </button>
+    </div>
+    <div class="composer-note">Nature's Academy early learning</div>
+  </form>
+</div>
+<div id="page-loader" style="display: none;">
+  <div class="loader-overlay"></div>
+  <div class="loader-spinner"></div>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const chatForm = document.getElementById('chat-form');
+  const messageInput = document.querySelector('#chat-form textarea[name="message"]');
+  const sendBtn = document.getElementById('send-btn');
+  const sendText = document.getElementById('send-text');
+  const loadingText = document.getElementById('loading-text');
+  const messagesContainer = document.getElementById('messages');
+
+  // Auto-scroll to bottom function
+  function scrollToBottom() {
+    const bubbles = messagesContainer.querySelectorAll('.bubble');
+    const lastBubble = bubbles[bubbles.length - 1];
+    if (lastBubble) {
+      lastBubble.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+    
+  }
+
+  // Initial scroll to bottom
+  scrollToBottom();
+
+  // Function to create message bubble HTML
+  function createMessageBubble(role, content) {
+    const roleLabel = role === 'user' ? 'You' : 'Assistant';
+    const bubbleClass = role === 'user' ? 'bubble user' : 'bubble bot';
+    
+    escapedContent = content;
+    // Escape HTML and then replace newlines
+    if(role == 'user'){
+      const escapedContent = content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/\n/g, '<br>');
+    }
+    
+    
+    return `
+      <div class="${bubbleClass}">
+        <div class="role">${roleLabel}</div>
+        <div class="content">${escapedContent}</div>
+      </div>
+    `;
+  }
+  function showPageLoader(show) {
+    const loader = document.getElementById('page-loader');
+    if (loader) {
+      loader.style.display = show ? 'flex' : 'none';
+    }
+  }
+
+  // Function to show loading state
+  function setLoadingState(isLoading) {
+    if (isLoading) {
+      sendBtn.disabled = true;
+      sendText.style.display = 'none';
+      loadingText.style.display = 'inline';
+      messageInput.disabled = true;
+    } else {
+      sendBtn.disabled = false;
+      sendText.style.display = 'inline';
+      loadingText.style.display = 'none';
+      messageInput.disabled = false;
+    }
+  }
+
+  // Function to remove empty message if it exists
+  function removeEmptyMessage() {
+    const emptyDiv = messagesContainer.querySelector('.empty');
+    if (emptyDiv) {
+      emptyDiv.remove();
+    }
+  }
+
+  // Handle form submission
+  chatForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    // Set loading state
+    setLoadingState(true);
+    showPageLoader(true);
+
+    // Remove empty message if present
+    removeEmptyMessage();
+
+    // Add user message to UI immediately
+    messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('user', message));
+    scrollToBottom();
+
+    // Clear input
+    messageInput.value = '';
+
+    try {
+      // Get CSRF token
+      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+      // Send AJAX request
+      const response = await fetch('{% url "send_message" %}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken,
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({
+          message: message
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Add assistant message to UI
+        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', data.assistant_message));
+        scrollToBottom();
+      } else {
+        // Handle error
+        console.error('Error:', data.error);
+        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was an error processing your message.'));
+        scrollToBottom();
+      }
+    } catch (error) {
+      console.error('Network error:', error);
+      messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was a network error. Please try again.'));
+      scrollToBottom();
+    } finally {
+      // Reset loading state
+      setLoadingState(false);
+      showPageLoader(false);
+      // Focus back to input
+      messageInput.focus();
+    }
+  });
+
+  // Allow Enter key to submit (optional enhancement)
+  messageInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      chatForm.dispatchEvent(new Event('submit'));
+    }
+  });
+
+  // Focus input on page load and ensure proper positioning
+  messageInput.focus();
+  
+  // Add resize observer to handle dynamic content changes
+  if (window.ResizeObserver) {
+    const resizeObserver = new ResizeObserver(() => {
+      scrollToBottom();
+    });
+    resizeObserver.observe(messagesContainer);
+  }
+  
+  // Handle window resize to maintain scroll position
+  window.addEventListener('resize', () => {
+    setTimeout(() => scrollToBottom(), 100);
+  });
+
+  function setLoadingState(isLoading) {
+    const sendIcon = document.getElementById('send-icon');
+    const stopIcon = document.getElementById('stop-icon');
+    
+    if (isLoading) {
+      sendBtn.disabled = true;
+      sendIcon.style.display = 'none';
+      stopIcon.style.display = 'inline';
+      messageInput.disabled = true;
+    } else {
+      sendBtn.disabled = false;
+      sendIcon.style.display = 'inline';
+      stopIcon.style.display = 'none';
+      messageInput.disabled = false;
+    }
+  }
+
+});
+</script>
+{% endblock %}

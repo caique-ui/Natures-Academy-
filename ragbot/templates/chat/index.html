@@ -20,7 +20,7 @@
       <div class="empty">
         <img src="/static/images/logo.png" alt="Nature's Academy" title="Nature's Academy" width="100"/>
         <h1>Welcome! to Nature's Academy</h1>
-        Ask anything related to NA Procedures.</div>
+        Ask me anything related to Natures Academy.</div>
     {% endfor %}
   </div>
 
@@ -40,14 +40,23 @@
   <div class="loader-overlay"></div>
   <div class="loader-spinner"></div>
 </div>
+
+<!-- Add status indicator for streaming -->
+<div id="status-indicator" style="display: none; position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 8px 16px; border-radius: 20px; font-size: 14px; z-index: 1000;">
+  <span id="status-text"></span>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   const chatForm = document.getElementById('chat-form');
   const messageInput = document.querySelector('#chat-form textarea[name="message"]');
   const sendBtn = document.getElementById('send-btn');
-  const sendText = document.getElementById('send-text');
-  const loadingText = document.getElementById('loading-text');
   const messagesContainer = document.getElementById('messages');
+  const statusIndicator = document.getElementById('status-indicator');
+  const statusText = document.getElementById('status-text');
+  
+  let isStreaming = false;
+  let currentStreamingDiv = null;
 
   // Auto-scroll to bottom function
   function scrollToBottom() {
@@ -56,7 +65,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (lastBubble) {
       lastBubble.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-    
   }
 
   // Initial scroll to bottom
@@ -67,18 +75,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const roleLabel = role === 'user' ? 'You' : 'Assistant';
     const bubbleClass = role === 'user' ? 'bubble user' : 'bubble bot';
     
-    escapedContent = content;
-    // Escape HTML and then replace newlines
-    if(role == 'user'){
-      const escapedContent = content
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;')
-      .replace(/\n/g, '<br>');
+    let escapedContent = content;
+    // Escape HTML for user messages only
+    if(role === 'user'){
+      escapedContent = content
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/\n/g, '<br>');
+    } else {
+      // For assistant messages, just replace newlines
+      escapedContent = content.replace(/\n/g, '<br>');
     }
-    
     
     return `
       <div class="${bubbleClass}">
@@ -87,6 +97,18 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     `;
   }
+
+  // Function to create empty assistant bubble for streaming
+  function createStreamingBubble() {
+    const div = document.createElement('div');
+    div.className = 'bubble bot';
+    div.innerHTML = `
+      <div class="role">Assistant</div>
+      <div class="content"></div>
+    `;
+    return div;
+  }
+
   function showPageLoader(show) {
     const loader = document.getElementById('page-loader');
     if (loader) {
@@ -94,18 +116,34 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
+  // Status indicator functions
+  function showStatus(message) {
+    statusText.textContent = message;
+    statusIndicator.style.display = 'block';
+  }
+
+  function hideStatus() {
+    statusIndicator.style.display = 'none';
+  }
+
   // Function to show loading state
-  function setLoadingState(isLoading) {
+  function setLoadingState(isLoading, isStreamingMode = false) {
+    const sendIcon = document.getElementById('send-icon');
+    const stopIcon = document.getElementById('stop-icon');
+    
     if (isLoading) {
       sendBtn.disabled = true;
-      sendText.style.display = 'none';
-      loadingText.style.display = 'inline';
+      sendIcon.style.display = 'none';
+      stopIcon.style.display = 'inline';
       messageInput.disabled = true;
+      isStreaming = isStreamingMode;
     } else {
       sendBtn.disabled = false;
-      sendText.style.display = 'inline';
-      loadingText.style.display = 'none';
+      sendIcon.style.display = 'inline';
+      stopIcon.style.display = 'none';
       messageInput.disabled = false;
+      isStreaming = false;
+      currentStreamingDiv = null;
     }
   }
 
@@ -117,16 +155,131 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
 
+  // Streaming message handler
+  async function sendMessageStream(message) {
+    try {
+      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+      const response = await fetch('{% url "send_message_stream" %}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken,
+        },
+        body: JSON.stringify({message: message})
+      });
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      // Create streaming bubble
+      currentStreamingDiv = createStreamingBubble();
+      messagesContainer.appendChild(currentStreamingDiv);
+      scrollToBottom();
+
+      function readStream() {
+        return reader.read().then(({done, value}) => {
+          if (done) {
+            setLoadingState(false);
+            hideStatus();
+            return;
+          }
+
+          const chunk = decoder.decode(value);
+          const lines = chunk.split('\n');
+
+          lines.forEach(line => {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                
+                if (data.type === 'status') {
+                  showStatus(data.message);
+                } else if (data.type === 'clear_status') {
+                  hideStatus();
+                } else if (data.type === 'content') {
+                  if (currentStreamingDiv) {
+                    const contentDiv = currentStreamingDiv.querySelector('.content');
+                    contentDiv.innerHTML += data.content.replace(/\n/g, '<br>');
+                    scrollToBottom();
+                  }
+                } else if (data.type === 'done') {
+                  hideStatus();
+                  setLoadingState(false);
+                  console.log('Streaming complete:', data.response_type);
+                } else if (data.type === 'error') {
+                  hideStatus();
+                  if (currentStreamingDiv) {
+                    const contentDiv = currentStreamingDiv.querySelector('.content');
+                    contentDiv.innerHTML = 'Sorry, there was an error processing your message.';
+                  }
+                  setLoadingState(false);
+                }
+              } catch (e) {
+                console.error('Error parsing streaming data:', e);
+              }
+            }
+          });
+
+          return readStream();
+        });
+      }
+
+      return readStream();
+      
+    } catch (error) {
+      console.error('Streaming error:', error);
+      hideStatus();
+      if (currentStreamingDiv) {
+        const contentDiv = currentStreamingDiv.querySelector('.content');
+        contentDiv.innerHTML = 'Sorry, there was a network error. Please try again.';
+      }
+      setLoadingState(false);
+    }
+  }
+
+  // Regular (non-streaming) message handler
+  async function sendMessageRegular(message) {
+    try {
+      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+      const response = await fetch('{% url "send_message" %}', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': csrfToken,
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({message: message})
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', data.assistant_message));
+        scrollToBottom();
+      } else {
+        console.error('Error:', data.error);
+        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was an error processing your message.'));
+        scrollToBottom();
+      }
+    } catch (error) {
+      console.error('Network error:', error);
+      messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was a network error. Please try again.'));
+      scrollToBottom();
+    }
+  }
+
   // Handle form submission
   chatForm.addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const message = messageInput.value.trim();
-    if (!message) return;
-
-    // Set loading state
-    setLoadingState(true);
-    showPageLoader(true);
+    if (!message || isStreaming) return;
 
     // Remove empty message if present
     removeEmptyMessage();
@@ -138,46 +291,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Clear input
     messageInput.value = '';
 
+    // Set loading state for streaming
+    setLoadingState(true, true);
+
+    // Use streaming by default, fall back to regular if needed
     try {
-      // Get CSRF token
-      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-
-      // Send AJAX request
-      const response = await fetch('{% url "send_message" %}', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': csrfToken,
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({
-          message: message
-        })
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // Add assistant message to UI
-        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', data.assistant_message));
-        scrollToBottom();
-      } else {
-        // Handle error
-        console.error('Error:', data.error);
-        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was an error processing your message.'));
-        scrollToBottom();
-      }
+      await sendMessageStream(message);
     } catch (error) {
-      console.error('Network error:', error);
-      messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was a network error. Please try again.'));
-      scrollToBottom();
-    } finally {
-      // Reset loading state
+      console.log('Streaming failed, falling back to regular request');
+      setLoadingState(true, false);
+      showPageLoader(true);
+      await sendMessageRegular(message);
       setLoadingState(false);
       showPageLoader(false);
-      // Focus back to input
-      messageInput.focus();
     }
+
+    // Focus back to input
+    messageInput.focus();
   });
 
   // Allow Enter key to submit (optional enhancement)
@@ -188,7 +318,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // Focus input on page load and ensure proper positioning
+  // Handle stop button (optional - stop streaming)
+  sendBtn.addEventListener('click', function(e) {
+    if (isStreaming) {
+      e.preventDefault();
+      // Could implement stream cancellation here if needed
+      setLoadingState(false);
+      hideStatus();
+    }
+  });
+
+  // Focus input on page load
   messageInput.focus();
   
   // Add resize observer to handle dynamic content changes
@@ -203,24 +343,6 @@ document.addEventListener('DOMContentLoaded', function() {
   window.addEventListener('resize', () => {
     setTimeout(() => scrollToBottom(), 100);
   });
-
-  function setLoadingState(isLoading) {
-    const sendIcon = document.getElementById('send-icon');
-    const stopIcon = document.getElementById('stop-icon');
-    
-    if (isLoading) {
-      sendBtn.disabled = true;
-      sendIcon.style.display = 'none';
-      stopIcon.style.display = 'inline';
-      messageInput.disabled = true;
-    } else {
-      sendBtn.disabled = false;
-      sendIcon.style.display = 'inline';
-      stopIcon.style.display = 'none';
-      messageInput.disabled = false;
-    }
-  }
-
 });
 </script>
 {% endblock %}

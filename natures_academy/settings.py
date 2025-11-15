@@ -34,7 +34,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware'
+    'django.contrib.messages.middleware.MessageMiddleware',
 ]
 
 ROOT_URLCONF = 'natures_academy.urls'
@@ -86,3 +86,8 @@ GDRIVE_TOKEN_PATH =  os.getenv("GDRIVE_TOKEN_PATH")
 GDRIVE_SERVICE_ACCOUNT_PATH =  os.getenv("GDRIVE_SERVICE_ACCOUNT_PATH")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# settings.py
+USE_IVF_INDEX = True  # For datasets > 1000 documents
+OPENAI_EMBED_MODEL = "text-embedding-3-small"  # Fastest OpenAI model
+#OPENAI_EMBED_MODEL = "gpt-3.5-turbo"

@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
+from google.auth import default
 from django.conf import settings
 from pdfminer.high_level import extract_text as pdf_extract
 from pypdf import PdfReader
@@ -14,7 +15,10 @@ from docx import Document
 import socket
 
 # Drive scopes: read-only
-SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.metadata.readonly"
+]
 
 MIME_EXPORTS = {
     "application/vnd.google-apps.document": ("text/plain", "txt"),
@@ -151,7 +155,7 @@ def extract_pptx_text(file_data: bytes) -> str:
         return ""
 
 
-def _creds_with_retry(max_retries=3):
+def _creds_with_retry_old(max_retries=3):
     """Create credentials using Service Account with retry logic."""
     for attempt in range(max_retries):
         try:
@@ -189,6 +193,46 @@ def _creds_with_retry(max_retries=3):
                 raise Exception("Invalid service account credentials. Please check your service_account.json file.")
             elif "access_denied" in str(e):
                 raise Exception("Access denied. Make sure your service account has access to the Drive folder.")
+            else:
+                print(f"❌ Authentication error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                else:
+                    raise
+
+def _creds_with_retry(max_retries=3):
+    """Create credentials using ADC (works locally and in GCP) with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            print(f"Attempting to authenticate... (attempt {attempt + 1}/{max_retries})")
+
+            # Set socket timeout to prevent hanging
+            socket.setdefaulttimeout(30)
+
+            # Use Application Default Credentials (ADC)
+            credentials, _ = default(scopes=SCOPES)
+
+            # Force refresh to test connection
+            request = Request()
+            credentials.refresh(request)
+
+            print("✅ Authentication successful!")
+            return credentials
+
+        except socket.timeout:
+            print(f"❌ Connection timeout on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 5
+                print(f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                raise Exception("Authentication failed after multiple timeout attempts. Check your internet connection.")
+
+        except Exception as e:
+            if "invalid_grant" in str(e):
+                raise Exception("Invalid credentials. If local, run `gcloud auth application-default login`. If in GCP, make sure a service account is attached.")
+            elif "access_denied" in str(e):
+                raise Exception("Access denied. Make sure your identity (user or service account) has access to the Drive folder.")
             else:
                 print(f"❌ Authentication error on attempt {attempt + 1}: {e}")
                 if attempt < max_retries - 1:

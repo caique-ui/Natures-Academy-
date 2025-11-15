@@ -1,10 +1,11 @@
 # ragbot/urls.py
 from django.urls import path
-from .views import chat_view, reset_chat, reindex, send_message
+from . import views
 
 urlpatterns = [
-    path('', chat_view, name='chat'),
-    path('ask/', send_message, name='send_message'),
-    path('reset/', reset_chat, name='reset_chat'),
-    path('reindex/', reindex, name='reindex'),
+    path('', views.chat_view, name='chat'),
+    path('send/', views.send_message, name='send_message'),  # Keep existing
+    path('send-stream/', views.send_message_stream, name='send_message_stream'),  # New streaming
+    path('reset/', views.reset_chat, name='reset_chat'),
+    path('reindex/', views.reindex, name='reindex'),
 ]

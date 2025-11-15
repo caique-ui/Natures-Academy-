@@ -5,6 +5,7 @@ cachetools==5.5.2
 certifi==2025.8.3
 cffi==1.17.1
 charset-normalizer==3.4.3
+click==8.3.0
 cryptography==45.0.7
 distro==1.9.0
 Django==5.2.5
@@ -56,4 +57,5 @@ typing-inspection==0.4.1
 typing_extensions==4.15.0
 uritemplate==4.2.0
 urllib3==2.5.0
+uvicorn==0.36.0
 xlsxwriter==3.2.5
