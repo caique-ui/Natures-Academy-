@@ -272,44 +272,6 @@ class VectorStore:
             print(f"Total vectors in index: {self.index.ntotal}")
             print(f"Index trained: {self._is_trained}")
 
-    '''def search(self, query: str, k: int = 5) -> List[Tuple[float, Dict]]:
-        """Fast search without debug output"""
-        if self.index.ntotal == 0:
-            return []
-            
-        if not self._is_trained:
-            return []
-        
-        # Set IVF search parameters
-        if hasattr(self.index, 'nprobe'):
-            self.index.nprobe = min(3, getattr(self.index, 'nlist', 10))  # Lower nprobe for speed
-        
-        try:
-            # Use cached embedding if available
-            query_hash = str(hash(query))
-            if query_hash in self._embedding_cache:
-                qv = self._embedding_cache[query_hash].reshape(1, -1)
-            else:
-                qv = self.embed([query])
-                if len(self._embedding_cache) < self._cache_max_size:
-                    self._embedding_cache[query_hash] = qv[0].copy()
-            
-            search_k = min(k, self.index.ntotal)
-            D, I = self.index.search(qv, search_k)
-            
-            results = []
-            for score, idx in zip(D[0], I[0]):
-                if idx == -1 or idx >= len(self.metadatas):
-                    continue
-                meta = self.metadatas[idx]
-                results.append((float(score), meta))
-            
-            return results
-            
-        except Exception as e:
-            print(f"Error searching: {e}")
-            return []'''
-
     
     def search(self, query: str, k: int = 5) -> List[Tuple[float, Dict]]:
         """Search using IVF index with detailed timing"""

@@ -288,6 +288,7 @@ def send_message_stream(request):
         return JsonResponse({'error': f'An error occurred: {str(e)}'}, status=500)
 
 @require_http_methods(["POST"]) 
+@csrf_exempt
 def reset_chat(request):
     """Reset chat conversation"""
     request.session["convo"] = []
@@ -299,6 +300,7 @@ def reset_chat(request):
         return redirect("chat")
 
 @require_http_methods(["POST"]) 
+@csrf_exempt
 def reindex(request):
     """Shortcut button to remind that indexing is via management command"""
     from django.contrib import messages
