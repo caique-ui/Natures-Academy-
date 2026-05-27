@@ -8,7 +8,8 @@ from asgiref.sync import sync_to_async
 import json
 import asyncio
 from .forms import ChatForm
-from .vectorstore import get_store
+#from .vectorstore import get_store
+from .vectorstore_db import get_db_store as get_store
 from openai import AsyncOpenAI
 
 SYSTEM_PROMPT = (
@@ -90,7 +91,7 @@ async def get_search_results(user_msg, k, snippet_size):
     """Async wrapper for search"""
     def sync_search():
         store = get_store()
-        return store.search(user_msg, k=k) if store.index.ntotal > 0 else []
+        return store.search(user_msg, k=k)
     
     return await sync_to_async(sync_search)()
 
@@ -149,7 +150,7 @@ def send_message(request):
         
         # Search with smart parameters
         store = get_store()
-        retrieved = store.search(user_msg, k=query_params['k_results']) if store.index.ntotal > 0 else []
+        retrieved = store.search(user_msg, k=query_params['k_results'])
         
         # Build context
         context_text = build_context(retrieved, query_params['snippet_size'], query_params['response_type'])
@@ -220,8 +221,14 @@ def send_message_stream(request):
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Searching documents...'})}\n\n"
                 
                 # Get search results
+                #store = get_store()
+                #retrieved = store.search(user_msg, k=query_params['k_results'])
+
                 store = get_store()
-                retrieved = store.search(user_msg, k=query_params['k_results']) if store.index.ntotal > 0 else []
+                stats = store.get_stats()
+                print("STORE STATS:", stats)
+                retrieved = store.search(user_msg, k=query_params['k_results'])
+                print("RETRIEVED:", len(retrieved), retrieved[:1])
                 
                 # Build context
                 context_text = build_context(retrieved, query_params['snippet_size'], query_params['response_type'])
@@ -235,9 +242,9 @@ def send_message_stream(request):
                     {
                         "role": "user", 
                         "content": f"User Question: {user_msg}\n\n"
-                                   f"Please answer this question using ONLY the document context provided below. "
-                                   f"Maintain exact formatting, wording, and structure from the original documents.\n\n"
-                                   f"DOCUMENT CONTEXT:\n{context_text}"
+                                    f"Please answer this question using ONLY the document context provided below. "
+                                    f"Maintain exact formatting, wording, and structure from the original documents.\n\n"
+                                    f"DOCUMENT CONTEXT:\n{context_text}"
                     },
                 ]
                 
@@ -270,10 +277,11 @@ def send_message_stream(request):
                 
                 # Send completion
                 yield f"data: {json.dumps({'type': 'done', 'full_response': full_response})}\n\n"
-                
+                    
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
         
+        print("Starting streaming response...")
         response = StreamingHttpResponse(
             generate_response(), 
             content_type='text/event-stream'
