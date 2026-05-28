@@ -122,7 +122,7 @@ CHUNK_MAX_CHARS = 1500
 CHUNK_OVERLAP   = 150
 
 # Webhook settings (only needed if using Drive push notifications)
-DRIVE_WEBHOOK_URL   = "https://yourdomain.com/webhooks/drive/notify/"
+DRIVE_WEBHOOK_URL   = "https://natures-academy.com/webhooks/drive/notify/"
 DRIVE_WEBHOOK_TOKEN = "your-secret-token"   # set after running --register-watch
 DRIVE_CHANNEL_ID    = ""                    # set after running --register-watch
 DRIVE_RESOURCE_ID   = ""                    # set after running --register-watch
