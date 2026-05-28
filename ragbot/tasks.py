@@ -53,7 +53,7 @@ def _get_drive_service(max_retries: int = 3):
                 credentials, _ = default(scopes=SCOPES)
             else:
                 print("Using Compute Engine credentials (service account attached to VM/container)")
-                credentials = compute_engine.Credentials(scopes=SCOPES)
+                credentials = compute_engine.Credentials()
             credentials.refresh(Request())
             return build("drive", "v3", credentials=credentials, cache_discovery=False)
         except socket.timeout:

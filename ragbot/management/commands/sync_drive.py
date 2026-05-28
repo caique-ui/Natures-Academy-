@@ -360,7 +360,7 @@ class Command(BaseCommand):
                     credentials, _ = default(scopes=scopes)
                 else:
                     print("Using Compute Engine credentials (service account attached to VM/container)")
-                    credentials = compute_engine.Credentials(scopes=scopes)
+                    credentials = compute_engine.Credentials()
                 credentials.refresh(Request())
                 return build("drive", "v3", credentials=credentials, cache_discovery=False)
             except socket.timeout:

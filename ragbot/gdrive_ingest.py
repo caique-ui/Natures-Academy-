@@ -215,7 +215,7 @@ def _creds_with_retry(max_retries=3):
                 credentials, _ = default(scopes=SCOPES)
             else:
                 print("Using Compute Engine credentials (service account attached to VM/container)")
-                credentials = compute_engine.Credentials(scopes=SCOPES)
+                credentials = compute_engine.Credentials()
 
             # Force refresh to test connection
             request = Request()
