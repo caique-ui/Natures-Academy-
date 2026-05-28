@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'ragbot',
+    'django_celery_beat'
 ]
 
 MIDDLEWARE = [
@@ -144,3 +145,5 @@ CELERY_BEAT_SCHEDULE = {
         "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
     },
 }
+
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
