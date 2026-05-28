@@ -145,5 +145,5 @@ CELERY_BEAT_SCHEDULE = {
         "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
     },
 }
-
+APP_ENV=os.getenv("APP_ENV", "live")
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"

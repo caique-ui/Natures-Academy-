@@ -344,7 +344,7 @@ class Command(BaseCommand):
         """
         import socket
         import time
-        from google.auth import default
+        from google.auth import default, compute_engine
         from google.auth.transport.requests import Request
         from googleapiclient.discovery import build
 
@@ -355,7 +355,12 @@ class Command(BaseCommand):
         for attempt in range(max_retries):
             try:
                 socket.setdefaulttimeout(30)
-                credentials, _ = default(scopes=scopes)
+                if settings.APP_ENV == "local":
+                    print("Using local ADC credentials (gcloud auth application-default login)")
+                    credentials, _ = default(scopes=scopes)
+                else:
+                    print("Using Compute Engine credentials (service account attached to VM/container)")
+                    credentials = compute_engine.Credentials(scopes=scopes)
                 credentials.refresh(Request())
                 return build("drive", "v3", credentials=credentials, cache_discovery=False)
             except socket.timeout:

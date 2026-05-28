@@ -7,7 +7,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
-from google.auth import default
+from google.auth import default, compute_engine
 from django.conf import settings
 from pdfminer.high_level import extract_text as pdf_extract
 from pypdf import PdfReader
@@ -210,7 +210,12 @@ def _creds_with_retry(max_retries=3):
             socket.setdefaulttimeout(30)
 
             # Use Application Default Credentials (ADC)
-            credentials, _ = default(scopes=SCOPES)
+            if settings.APP_ENV == "local":
+                print("Using local ADC credentials (gcloud auth application-default login)")
+                credentials, _ = default(scopes=SCOPES)
+            else:
+                print("Using Compute Engine credentials (service account attached to VM/container)")
+                credentials = compute_engine.Credentials(scopes=SCOPES)
 
             # Force refresh to test connection
             request = Request()

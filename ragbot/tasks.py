@@ -41,14 +41,19 @@ def _get_drive_service(max_retries: int = 3):
     """
     import socket
     import time
-    from google.auth import default
+    from google.auth import default, compute_engine
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
     for attempt in range(max_retries):
         try:
             socket.setdefaulttimeout(30)
-            credentials, _ = default(scopes=SCOPES)
+            if settings.APP_ENV == "local":
+                print("Using local ADC credentials (gcloud auth application-default login)")
+                credentials, _ = default(scopes=SCOPES)
+            else:
+                print("Using Compute Engine credentials (service account attached to VM/container)")
+                credentials = compute_engine.Credentials(scopes=SCOPES)
             credentials.refresh(Request())
             return build("drive", "v3", credentials=credentials, cache_discovery=False)
         except socket.timeout:
