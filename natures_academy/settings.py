@@ -130,9 +130,9 @@ DRIVE_RESOURCE_ID   = ""                    # set after running --register-watch
 
 # --- Celery Beat schedule ---
 # Controls when check_drive_changes_task runs automatically
-from celery.schedules import crontab
+# from celery.schedules import crontab
 
-CELERY_BEAT_SCHEDULE = {
+"""CELERY_BEAT_SCHEDULE = {
     # Check Drive for changes every hour
     "check-drive-changes-hourly": {
         "task":     "ragbot.tasks.check_drive_changes_task",
@@ -144,6 +144,6 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
         "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
     },
-}
+}"""
 APP_ENV=os.getenv("APP_ENV", "live")
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
