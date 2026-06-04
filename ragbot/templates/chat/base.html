@@ -15,12 +15,16 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">Nature's Academy</div>
-  <form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
-    <button class="btn secondary" title="Clear Conversation">CLEAR Conversation </button>
-  </form>
+  <div class="topbar-left">
+    {# Sidebar toggle — only rendered on chat page via block, empty elsewhere #}
+    {% block topbar_toggle %}{% endblock %}
+    <div class="brand">Nature's Academy</div>
+  </div>
+  <!--<form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
+    <button class="btn secondary" title="Clear Conversation">CLEAR Conversation</button>
+  </form>-->
 </header>
-<main class="container">
+<main class="main-content">
   {% block content %}{% endblock %}
 </main>
 </body>

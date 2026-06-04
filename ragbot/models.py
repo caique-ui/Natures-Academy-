@@ -1,4 +1,6 @@
+import uuid
 from django.db import models
+from django.contrib.auth.models import User
 from django.utils import timezone
 
 
@@ -251,3 +253,69 @@ class DriveSyncEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} @ {self.created_at:%Y-%m-%d %H:%M}"
+    
+
+class Conversation(models.Model):
+    """
+    A single conversation thread.
+
+    - Authenticated users: linked via `user` FK, persisted indefinitely.
+    - Anonymous users:     linked via `session_key` only. Orphaned automatically
+                           when the Django session expires (or browser closes if
+                           SESSION_EXPIRE_AT_BROWSER_CLOSE = True).
+
+    When an anonymous user logs in, `signals.py` migrates their session
+    conversations to their User account.
+    """
+    id          = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user        = models.ForeignKey(
+                    User, null=True, blank=True,
+                    on_delete=models.CASCADE, related_name="conversations"
+                  )
+    session_key = models.CharField(max_length=40, null=True, blank=True, db_index=True)
+    title       = models.CharField(max_length=200, default="New conversation")
+    created_at  = models.DateTimeField(default=timezone.now)
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes  = [
+            models.Index(fields=["user", "-updated_at"]),
+            models.Index(fields=["session_key", "-updated_at"]),
+        ]
+
+    def __str__(self):
+        owner = self.user.username if self.user else f"anon:{self.session_key[:8]}"
+        return f"[{owner}] {self.title[:50]}"
+
+    def get_history(self, max_messages: int = 10) -> list[dict]:
+        """
+        Return the last `max_messages` turns formatted for the LLM.
+        Oldest first so the model reads the conversation in order.
+        """
+        msgs = list(
+            self.messages.order_by("-created_at")[:max_messages]
+        )
+        msgs.reverse()
+        return [{"role": m.role, "content": m.content} for m in msgs]
+
+
+class Message(models.Model):
+    ROLE_USER      = "user"
+    ROLE_ASSISTANT = "assistant"
+    ROLE_CHOICES   = [(ROLE_USER, "User"), (ROLE_ASSISTANT, "Assistant")]
+
+    conversation  = models.ForeignKey(
+                      Conversation, on_delete=models.CASCADE, related_name="messages"
+                    )
+    role          = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    content       = models.TextField()
+    # Stores list of {"source_name": str, "chunk_pk": int, "score": float}
+    source_chunks = models.JSONField(default=list, blank=True)
+    created_at    = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"[{self.role}] {self.content[:60]}"

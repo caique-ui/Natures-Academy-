@@ -147,3 +147,15 @@ DRIVE_RESOURCE_ID   = ""                    # set after running --register-watch
 }"""
 APP_ENV=os.getenv("APP_ENV", "live")
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+
+#================================================
+
+# Session: anonymous users lose history on browser close
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True   # anon sessions die with the tab
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 7   # 7 days for authenticated users
+
+LOGIN_URL      = "/auth/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+

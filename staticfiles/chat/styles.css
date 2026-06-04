@@ -408,3 +408,802 @@ button{
         transform: scale(1.05);
     }
 }
+
+/* ============================================================
+   SIDEBAR — paste at the bottom of styles.css, replacing the
+   "Sidebar styles" comment block.
+   All colours use existing :root variables.
+   ============================================================ */
+
+/* ── Topbar: add left group for toggle + brand ─────────────── */
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Toggle button — lives inside the topbar on all screen sizes */
+.sidebar-toggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  background: rgba(139, 157, 141, 0.15);
+  color: var(--fg);
+}
+
+/* ── main-content: zero padding so app-shell can go edge-to-edge */
+
+.main-content {
+  padding: 0;
+  margin: 0;
+}
+
+/* ── App shell: flex row that fills viewport below topbar ───── */
+
+.app-shell {
+  display: flex;
+  /* 100vh minus the topbar height (topbar is ~74px with padding) */
+  height: calc(100vh - 75px);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── Sidebar ────────────────────────────────────────────────── */
+
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid rgba(135, 159, 172, 0.12);
+  /* Smooth collapse on desktop */
+  transition: width 0.25s ease, opacity 0.25s ease;
+}
+
+/* Collapsed state — desktop */
+.sidebar--collapsed {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── Sidebar header (logo label + new chat) ─────────────────── */
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(135, 159, 172, 0.12);
+  flex-shrink: 0;
+}
+
+.sidebar-logo {
+  font-family: 'Heiti SC', sans-serif;
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.sidebar-new {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-new:hover {
+  background: rgba(139, 157, 141, 0.15);
+  color: var(--fg);
+}
+
+/* ── Auth strip ─────────────────────────────────────────────── */
+
+.sidebar-auth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(135, 159, 172, 0.08);
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
+.auth-name {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.78rem;
+  color: var(--muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.auth-name i {
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.auth-link {
+  background: none;
+  border: none;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.auth-link:hover {
+  background: rgba(139, 157, 141, 0.15);
+  color: var(--fg);
+}
+
+.auth-link--register {
+  color: var(--bubble);
+}
+
+.auth-link--register:hover {
+  background: rgba(126, 172, 154, 0.15);
+  color: var(--fg);
+}
+
+/* ── Section label ──────────────────────────────────────────── */
+
+.sidebar-section-label {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.45;
+  padding: 12px 16px 5px;
+  flex-shrink: 0;
+}
+
+/* ── Conversation list ──────────────────────────────────────── */
+
+.conv-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 6px 12px;
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+
+.conv-list::-webkit-scrollbar { width: 4px; }
+.conv-list::-webkit-scrollbar-track { background: transparent; }
+.conv-list::-webkit-scrollbar-thumb {
+  background: rgba(135, 159, 172, 0.3);
+  border-radius: 2px;
+}
+.conv-list::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* ── Conversation item ──────────────────────────────────────── */
+
+.conv-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s;
+  animation: convIn 0.18s ease-out;
+}
+
+@keyframes convIn {
+  from { opacity: 0; transform: translateX(-5px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.conv-item:hover { background: rgba(135, 159, 172, 0.08); }
+
+.conv-item--active {
+  background: rgba(139, 157, 141, 0.13);
+}
+
+.conv-item--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 22%;
+  height: 56%;
+  width: 3px;
+  background: var(--bubble);
+  border-radius: 0 2px 2px 0;
+}
+
+.conv-title {
+  flex: 1;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.82rem;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.conv-item:hover .conv-title,
+.conv-item--active .conv-title { opacity: 1; }
+
+.conv-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.conv-item:hover .conv-actions { display: flex; }
+
+.conv-rename,
+.conv-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  transition: background 0.12s, color 0.12s;
+}
+
+.conv-rename:hover {
+  background: rgba(139, 157, 141, 0.2);
+  color: var(--bubble);
+}
+
+.conv-delete:hover {
+  background: rgba(239, 100, 100, 0.12);
+  color: #ef6464;
+}
+
+.conv-empty {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.78rem;
+  color: var(--muted);
+  opacity: 0.4;
+  text-align: center;
+  padding: 20px 16px;
+  font-style: italic;
+}
+
+/* ── Chatwrap fills remaining space ─────────────────────────── */
+
+.app-shell .chatwrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-shell .messages {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px;
+}
+
+.app-shell .composer {
+  flex-shrink: 0;
+  padding: 10px 20px;
+}
+
+/* ── Mobile: sidebar slides over content ────────────────────── */
+
+@media (max-width: 768px) {
+  /* On mobile the sidebar is off-screen by default */
+  .sidebar {
+    position: fixed;
+    top: 74px;           /* below topbar */
+    left: 0;
+    height: calc(100vh - 74px);
+    z-index: 100;
+    width: 260px;
+    /* Override desktop collapse — use translate instead */
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  /* Open state on mobile */
+  .sidebar--mobile-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Don't use width collapse on mobile */
+  .sidebar--collapsed {
+    width: 260px !important;
+    opacity: 1 !important;
+  }
+
+  /* Dim overlay behind sidebar on mobile */
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    top: 74px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(11, 41, 65, 0.55);
+    backdrop-filter: blur(2px);
+    z-index: 99;
+  }
+
+  .sidebar-overlay--visible { display: block; }
+}
+
+@media (min-width: 769px) {
+  .sidebar-overlay { display: none !important; }
+}
+
+/* ── Sidebar footer (auth) ──────────────────────────────────── */
+
+.sidebar-footer {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(135, 159, 172, 0.12);
+  padding: 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Logged-in: user row ────────────────────────────────────── */
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+}
+
+/* Avatar circle showing first letter of username */
+.sidebar-user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(126, 172, 154, 0.2);   /* --bubble tint */
+  border: 1px solid rgba(126, 172, 154, 0.35);
+  color: var(--bubble);
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.sidebar-user-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sidebar-user-name {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.83rem;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-user-status {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.68rem;
+  color: var(--bubble);
+  opacity: 0.75;
+  letter-spacing: 0.02em;
+}
+
+/* Sign-out icon button */
+.sidebar-signout {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+  /* override global button uppercase */
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sidebar-signout:hover {
+  background: rgba(239, 100, 100, 0.12);
+  color: #ef6464;
+}
+
+/* ── Guest: user row ────────────────────────────────────────── */
+
+.sidebar-guest {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+}
+
+.sidebar-guest-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(135, 159, 172, 0.1);
+  border: 1px solid rgba(135, 159, 172, 0.2);
+  color: var(--muted);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-guest-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-guest-label {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.83rem;
+  color: var(--muted);
+}
+
+.sidebar-guest-hint {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.68rem;
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* ── Guest: sign-in / register buttons ─────────────────────── */
+
+.sidebar-auth-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-auth-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 8px;
+  border-radius: 10px;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.sidebar-auth-btn--login {
+  background: rgba(126, 172, 154, 0.15);
+  color: var(--bubble);
+  border: 1px solid rgba(126, 172, 154, 0.25);
+}
+
+.sidebar-auth-btn--login:hover {
+  background: rgba(126, 172, 154, 0.25);
+  color: var(--fg);
+  box-shadow: 0 2px 10px rgba(126, 172, 154, 0.12);
+}
+
+.sidebar-auth-btn--register {
+  background: rgba(139, 157, 141, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(139, 157, 141, 0.2);
+}
+
+.sidebar-auth-btn--register:hover {
+  background: rgba(139, 157, 141, 0.22);
+  color: var(--fg);
+}
+
+
+/* ============================================================
+   AUTH PAGES (login + register)
+   ============================================================ */
+
+/* ── Page wrapper: centres the card below the topbar ───────── */
+
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 74px);  /* below topbar */
+  padding: 24px 16px;
+  background: var(--bg);
+}
+
+/* ── Card ───────────────────────────────────────────────────── */
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--panel);
+  border: 1px solid rgba(135, 159, 172, 0.12);
+  border-radius: 18px;
+  padding: 40px 36px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+/* ── Brand block ────────────────────────────────────────────── */
+
+.auth-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+
+.auth-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  opacity: 0.92;
+}
+
+.auth-title {
+  font-family: 'Heiti SC', sans-serif;
+  font-weight: 400;
+  font-size: 1.25rem;
+  color: var(--fg);
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.auth-subtitle {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ── Error banner ───────────────────────────────────────────── */
+
+.auth-error {
+  background: rgba(239, 100, 100, 0.1);
+  border: 1px solid rgba(239, 100, 100, 0.3);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: #f8a0a0;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+/* ── Form ───────────────────────────────────────────────────── */
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ── Field ──────────────────────────────────────────────────── */
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-label {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.auth-input {
+  width: 100%;
+  background: var(--question-box);  /* #435a69 — same as chat textarea */
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--fg);
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 400;
+  padding: 12px 16px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.auth-input::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.auth-input:focus {
+  border-color: rgba(126, 172, 154, 0.5);  /* --bubble at 50% */
+  box-shadow: 0 0 0 3px rgba(126, 172, 154, 0.1);
+}
+
+.auth-input--error {
+  border-color: rgba(239, 100, 100, 0.5);
+}
+
+.auth-input--error:focus {
+  border-color: rgba(239, 100, 100, 0.7);
+  box-shadow: 0 0 0 3px rgba(239, 100, 100, 0.08);
+}
+
+/* ── Inline field error ─────────────────────────────────────── */
+
+.auth-field-error {
+  font-size: 0.76rem;
+  color: #f8a0a0;
+  line-height: 1.4;
+}
+
+/* ── Help text (Django's password requirements) ─────────────── */
+
+.auth-help {
+  font-size: 0.74rem;
+  color: var(--muted);
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+/* ── Submit button ──────────────────────────────────────────── */
+
+.auth-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bubble);  /* #7eac9a — teal */
+  color: var(--bg);           /* dark blue text on teal */
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+}
+
+.auth-btn:hover {
+  background: #8ec2af;
+  box-shadow: 0 4px 16px rgba(126, 172, 154, 0.25);
+}
+
+.auth-btn:active {
+  transform: scale(0.99);
+}
+
+/* ── Switch link (sign in / register) ───────────────────────── */
+
+.auth-switch {
+  margin: 20px 0 0;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.auth-switch-link {
+  color: var(--bubble);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+
+.auth-switch-link:hover {
+  color: #8ec2af;
+  text-decoration: underline;
+}
+
+/* ── Guest link ─────────────────────────────────────────────── */
+
+.auth-guest {
+  display: block;
+  margin-top: 12px;
+  text-align: center;
+  font-size: 0.76rem;
+  color: var(--muted);
+  opacity: 0.55;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: opacity 0.15s;
+}
+
+.auth-guest:hover {
+  opacity: 0.9;
+}
+
+.auth-guest i {
+  margin-right: 4px;
+  font-size: 0.7rem;
+}
+
+/* ── Mobile tweaks ──────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .auth-card {
+    padding: 32px 22px 28px;
+    border-radius: 14px;
+  }
+
+  .auth-logo { width: 52px; height: 52px; }
+  .auth-title { font-size: 1.1rem; }
+}

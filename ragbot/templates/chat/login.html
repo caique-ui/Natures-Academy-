@@ -1,0 +1,72 @@
+{# templates/chat/login.html #}
+{% extends 'chat/base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="auth-page">
+  <div class="auth-card">
+
+    <div class="auth-brand">
+      <img src="/static/images/logo.png" alt="Nature's Academy" class="auth-logo" />
+      <h1 class="auth-title">Nature's Academy</h1>
+      <p class="auth-subtitle">Sign in to access your conversations</p>
+    </div>
+
+    {% if form.non_field_errors %}
+    <div class="auth-error">
+      {% for error in form.non_field_errors %}
+        <span>{{ error }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" class="auth-form">
+      {% csrf_token %}
+
+      <div class="auth-field">
+        <label class="auth-label" for="{{ form.username.id_for_label }}">Username</label>
+        <input
+          class="auth-input {% if form.username.errors %}auth-input--error{% endif %}"
+          type="text"
+          name="{{ form.username.html_name }}"
+          id="{{ form.username.id_for_label }}"
+          autocomplete="username"
+          autofocus
+          placeholder="Your username"
+          value="{{ form.username.value|default:'' }}"
+        />
+        {% if form.username.errors %}
+          <span class="auth-field-error">{{ form.username.errors.0 }}</span>
+        {% endif %}
+      </div>
+
+      <div class="auth-field">
+        <label class="auth-label" for="{{ form.password.id_for_label }}">Password</label>
+        <input
+          class="auth-input {% if form.password.errors %}auth-input--error{% endif %}"
+          type="password"
+          name="{{ form.password.html_name }}"
+          id="{{ form.password.id_for_label }}"
+          autocomplete="current-password"
+          placeholder="Your password"
+        />
+        {% if form.password.errors %}
+          <span class="auth-field-error">{{ form.password.errors.0 }}</span>
+        {% endif %}
+      </div>
+
+      <button type="submit" class="auth-btn">Sign in</button>
+    </form>
+
+    <!--<p class="auth-switch">
+      No account yet?
+      <a href="{% url 'register' %}" class="auth-switch-link">Create one</a>
+    </p>-->
+
+    <a href="{% url 'chat' %}" class="auth-guest">
+      <i class="fa-solid fa-arrow-left"></i> Continue as guest
+    </a>
+
+  </div>
+</div>
+{% endblock %}

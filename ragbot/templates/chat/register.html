@@ -1,0 +1,85 @@
+{# templates/chat/register.html #}
+{% extends 'chat/base.html' %}
+{% load static %}
+
+{% block content %}
+<div class="auth-page">
+  <div class="auth-card">
+
+    <div class="auth-brand">
+      <img src="/static/images/logo.png" alt="Nature's Academy" class="auth-logo" />
+      <h1 class="auth-title">Nature's Academy</h1>
+      <p class="auth-subtitle">Create an account to save your conversations</p>
+    </div>
+
+    <form method="post" class="auth-form">
+      {% csrf_token %}
+
+      <div class="auth-field">
+        <label class="auth-label" for="{{ form.username.id_for_label }}">Username</label>
+        <input
+          class="auth-input {% if form.username.errors %}auth-input--error{% endif %}"
+          type="text"
+          name="{{ form.username.html_name }}"
+          id="{{ form.username.id_for_label }}"
+          autocomplete="username"
+          autofocus
+          placeholder="Choose a username"
+          value="{{ form.username.value|default:'' }}"
+        />
+        {% if form.username.errors %}
+          <span class="auth-field-error">{{ form.username.errors.0 }}</span>
+        {% endif %}
+        {% if form.username.help_text %}
+          <span class="auth-help">{{ form.username.help_text }}</span>
+        {% endif %}
+      </div>
+
+      <div class="auth-field">
+        <label class="auth-label" for="{{ form.password1.id_for_label }}">Password</label>
+        <input
+          class="auth-input {% if form.password1.errors %}auth-input--error{% endif %}"
+          type="password"
+          name="{{ form.password1.html_name }}"
+          id="{{ form.password1.id_for_label }}"
+          autocomplete="new-password"
+          placeholder="Choose a password"
+        />
+        {% if form.password1.errors %}
+          <span class="auth-field-error">{{ form.password1.errors.0 }}</span>
+        {% endif %}
+        {% if form.password1.help_text %}
+          <span class="auth-help">{{ form.password1.help_text }}</span>
+        {% endif %}
+      </div>
+
+      <div class="auth-field">
+        <label class="auth-label" for="{{ form.password2.id_for_label }}">Confirm password</label>
+        <input
+          class="auth-input {% if form.password2.errors %}auth-input--error{% endif %}"
+          type="password"
+          name="{{ form.password2.html_name }}"
+          id="{{ form.password2.id_for_label }}"
+          autocomplete="new-password"
+          placeholder="Repeat your password"
+        />
+        {% if form.password2.errors %}
+          <span class="auth-field-error">{{ form.password2.errors.0 }}</span>
+        {% endif %}
+      </div>
+
+      <button type="submit" class="auth-btn">Create account</button>
+    </form>
+
+    <p class="auth-switch">
+      Already have an account?
+      <a href="{% url 'login' %}" class="auth-switch-link">Sign in</a>
+    </p>
+
+    <a href="{% url 'chat' %}" class="auth-guest">
+      <i class="fa-solid fa-arrow-left"></i> Continue as guest
+    </a>
+
+  </div>
+</div>
+{% endblock %}

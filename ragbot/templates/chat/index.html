@@ -1,347 +1,440 @@
 {% extends 'chat/base.html' %}
 {% load static %}
 
-{% block content %}
-<div class="chatwrap">
-  <div id="messages" class="messages">
-    {% for m in convo %}
-      {% if m.role == 'user' %}
-      <div class="bubble user">
-        <div class="role">You</div>
-        <div class="content">{{ m.content|linebreaksbr }}</div>
-      </div>
-      {% else %}
-      <div class="bubble bot">
-        <div class="role">Assistant</div>
-        <div class="content">{{ m.content|linebreaksbr }}</div>
-      </div>
-      {% endif %}
-    {% empty %}
-      <div class="empty">
-        <img src="/static/images/logo.png" alt="Nature's Academy" title="Nature's Academy" width="100"/>
-        <h1>Welcome! to Nature's Academy</h1>
-        Ask me anything related to Natures Academy.</div>
-    {% endfor %}
-  </div>
+{% block topbar_toggle %}
+<button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar" title="Toggle sidebar">
+  <i class="fa-solid fa-bars"></i>
+</button>
+{% endblock %}
 
-  <form id="chat-form" class="composer">
-    {% csrf_token %}
-    <div class="textarea-container">
+{% block content %}
+{# Tap-outside overlay for mobile #}
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+<div class="app-shell">
+
+  {# ── Sidebar ── #}
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-logo">Nature's Academy</span>
+      <button class="sidebar-new" id="new-chat-btn" title="New conversation">
+        <i class="fa-solid fa-pen-to-square"></i>
+      </button>
+    </div>
+
+    <div class="sidebar-section-label">Conversations</div>
+    <ul class="conv-list" id="conv-list">
+      {% for conv in conversations %}
+      <li class="conv-item {% if conv.id == active_conv_id %}conv-item--active{% endif %}"
+          data-id="{{ conv.id }}">
+        <span class="conv-title" title="{{ conv.title }}">{{ conv.title }}</span>
+        <div class="conv-actions">
+          <button class="conv-rename" data-id="{{ conv.id }}" title="Rename"><i class="fa-solid fa-pencil"></i></button>
+          <button class="conv-delete" data-id="{{ conv.id }}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </li>
+      {% empty %}
+      <li class="conv-empty" id="conv-empty">No conversations yet</li>
+      {% endfor %}
+    </ul>
+
+    {# ── Auth footer ── #}
+    <div class="sidebar-footer">
+      {% if user.is_authenticated %}
+        <div class="sidebar-user">
+          <div class="sidebar-user-avatar">
+            {{ user.username|first|upper }}
+          </div>
+          <div class="sidebar-user-info">
+            <span class="sidebar-user-name">{{ user.username }}</span>
+            <span class="sidebar-user-status">Signed in</span>
+          </div>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="sidebar-signout" title="Sign out">
+              <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            </button>
+          </form>
+        </div>
+      {% else %}
+        <div class="sidebar-guest">
+          <div class="sidebar-guest-icon">
+            <i class="fa-solid fa-circle-user"></i>
+          </div>
+          <div class="sidebar-guest-info">
+            <span class="sidebar-guest-label">Guest</span>
+            <span class="sidebar-guest-hint">Save your conversations</span>
+          </div>
+        </div>
+        <div class="sidebar-auth-actions">
+          <a href="{% url 'login' %}" class="sidebar-auth-btn sidebar-auth-btn--login">
+            <i class="fa-solid fa-right-to-bracket"></i> Sign in
+          </a>
+          <a href="{% url 'register' %}" class="sidebar-auth-btn sidebar-auth-btn--register">
+            Register
+          </a>
+        </div>
+      {% endif %}
+    </div>
+
+  </aside>
+
+  {# ── Main chat area ── #}
+  <div class="chatwrap">
+    <div id="messages" class="messages">
+      {% if active_messages %}
+        {% for m in active_messages %}
+          <div class="bubble {% if m.role == 'user' %}user{% else %}bot{% endif %}">
+            <div class="role">{% if m.role == 'user' %}You{% else %}Assistant{% endif %}</div>
+            <div class="content">{{ m.content|linebreaksbr }}</div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty" id="empty-state">
+          <img src="/static/images/logo.png" alt="Nature's Academy" width="100"/>
+          <h1>Welcome to Nature's Academy</h1>
+          <p>Ask me anything about our courses and programmes.</p>
+        </div>
+      {% endif %}
+    </div>
+
+    <form id="chat-form" class="composer">
+      {% csrf_token %}
+      <div class="textarea-container">
         {{ form.message }}
         <button id="send-btn" class="btn-inside" type="submit">
-            <span id="send-icon"><i class="fa-solid fa-paper-plane"></i></span>
-            <span id="stop-icon" style="display: none;"><i class="fa-solid fa-stop"></i></span>
+          <span id="send-icon"><i class="fa-solid fa-paper-plane"></i></span>
+          <span id="stop-icon" style="display:none;"><i class="fa-solid fa-stop"></i></span>
         </button>
-    </div>
-    <div class="composer-note">Nature's Academy early learning</div>
-  </form>
-</div>
-<div id="page-loader" style="display: none;">
-  <div class="loader-overlay"></div>
-  <div class="loader-spinner"></div>
+      </div>
+      <div class="composer-note">Nature's Academy early learning</div>
+    </form>
+  </div>
 </div>
 
-<!-- Add status indicator for streaming -->
-<div id="status-indicator" style="display: none; position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 8px 16px; border-radius: 20px; font-size: 14px; z-index: 1000;">
+{# Status pill #}
+<div id="status-indicator" style="display:none; position:fixed; bottom:100px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.8); color:#fff; padding:8px 16px; border-radius:20px; font-size:14px; z-index:1000;">
   <span id="status-text"></span>
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-  const chatForm = document.getElementById('chat-form');
-  const messageInput = document.querySelector('#chat-form textarea[name="message"]');
-  const sendBtn = document.getElementById('send-btn');
-  const messagesContainer = document.getElementById('messages');
-  const statusIndicator = document.getElementById('status-indicator');
-  const statusText = document.getElementById('status-text');
-  
-  let isStreaming = false;
-  let currentStreamingDiv = null;
+document.addEventListener('DOMContentLoaded', function () {
+  // ── State ──────────────────────────────────────────────────────────────
+  let currentConvId   = '{{ active_conv_id|default:"" }}' || null;
+  let isStreaming     = false;
+  let currentBotDiv   = null;
 
-  // Auto-scroll to bottom function
+  const chatForm      = document.getElementById('chat-form');
+  const messageInput  = chatForm.querySelector('textarea[name="message"]');
+  const sendBtn       = document.getElementById('send-btn');
+  const msgContainer  = document.getElementById('messages');
+  const convList      = document.getElementById('conv-list');
+  const newChatBtn    = document.getElementById('new-chat-btn');
+  const statusEl      = document.getElementById('status-indicator');
+  const statusText    = document.getElementById('status-text');
+
+  // ── Helpers ────────────────────────────────────────────────────────────
   function scrollToBottom() {
-    const bubbles = messagesContainer.querySelectorAll('.bubble');
-    const lastBubble = bubbles[bubbles.length - 1];
-    if (lastBubble) {
-      lastBubble.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
+    const bubbles = msgContainer.querySelectorAll('.bubble');
+    if (bubbles.length) bubbles[bubbles.length - 1].scrollIntoView({behavior: 'smooth', block: 'end'});
   }
 
-  // Initial scroll to bottom
-  scrollToBottom();
+  function showStatus(msg) { statusText.textContent = msg; statusEl.style.display = 'block'; }
+  function hideStatus()    { statusEl.style.display = 'none'; }
 
-  // Function to create message bubble HTML
-  function createMessageBubble(role, content) {
-    const roleLabel = role === 'user' ? 'You' : 'Assistant';
-    const bubbleClass = role === 'user' ? 'bubble user' : 'bubble bot';
-    
-    let escapedContent = content;
-    // Escape HTML for user messages only
-    if(role === 'user'){
-      escapedContent = content
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/\n/g, '<br>');
-    } else {
-      // For assistant messages, just replace newlines
-      escapedContent = content.replace(/\n/g, '<br>');
-    }
-    
-    return `
-      <div class="${bubbleClass}">
-        <div class="role">${roleLabel}</div>
-        <div class="content">${escapedContent}</div>
-      </div>
-    `;
+  function setLoading(on) {
+    isStreaming = on;
+    sendBtn.disabled = on;
+    messageInput.disabled = on;
+    document.getElementById('send-icon').style.display = on ? 'none'   : 'inline';
+    document.getElementById('stop-icon').style.display = on ? 'inline' : 'none';
+    if (!on) currentBotDiv = null;
   }
 
-  // Function to create empty assistant bubble for streaming
-  function createStreamingBubble() {
+  function removeEmptyState() {
+    const el = document.getElementById('empty-state');
+    if (el) el.remove();
+  }
+
+  function escapedHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+              .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'<br>');
+  }
+
+  function addBubble(role, html) {
     const div = document.createElement('div');
-    div.className = 'bubble bot';
-    div.innerHTML = `
-      <div class="role">Assistant</div>
-      <div class="content"></div>
-    `;
+    div.className = `bubble ${role === 'user' ? 'user' : 'bot'}`;
+    div.innerHTML = `<div class="role">${role === 'user' ? 'You' : 'Assistant'}</div><div class="content">${html}</div>`;
+    msgContainer.appendChild(div);
+    scrollToBottom();
     return div;
   }
 
-  function showPageLoader(show) {
-    const loader = document.getElementById('page-loader');
-    if (loader) {
-      loader.style.display = show ? 'flex' : 'none';
-    }
+  function createEmptyBotBubble() {
+    return addBubble('bot', '');
   }
 
-  // Status indicator functions
-  function showStatus(message) {
-    statusText.textContent = message;
-    statusIndicator.style.display = 'block';
-  }
+  // ── Sidebar: add/update conversation item ─────────────────────────────
+  function upsertConvItem(id, title) {
+    let item = convList.querySelector(`[data-id="${id}"]`);
+    const emptyEl = document.getElementById('conv-empty');
+    if (emptyEl) emptyEl.remove();
 
-  function hideStatus() {
-    statusIndicator.style.display = 'none';
-  }
-
-  // Function to show loading state
-  function setLoadingState(isLoading, isStreamingMode = false) {
-    const sendIcon = document.getElementById('send-icon');
-    const stopIcon = document.getElementById('stop-icon');
-    
-    if (isLoading) {
-      sendBtn.disabled = true;
-      sendIcon.style.display = 'none';
-      stopIcon.style.display = 'inline';
-      messageInput.disabled = true;
-      isStreaming = isStreamingMode;
+    if (!item) {
+      item = document.createElement('li');
+      item.className = 'conv-item';
+      item.dataset.id = id;
+      item.innerHTML = `
+        <span class="conv-title" title="${escapedHtml(title)}">${escapedHtml(title)}</span>
+        <div class="conv-actions">
+          <button class="conv-rename" data-id="${id}" title="Rename"><i class="fa-solid fa-pencil"></i></button>
+          <button class="conv-delete" data-id="${id}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+        </div>`;
+      convList.prepend(item);
     } else {
-      sendBtn.disabled = false;
-      sendIcon.style.display = 'inline';
-      stopIcon.style.display = 'none';
-      messageInput.disabled = false;
-      isStreaming = false;
-      currentStreamingDiv = null;
+      item.querySelector('.conv-title').textContent = title;
     }
+
+    // Mark active
+    convList.querySelectorAll('.conv-item').forEach(el => el.classList.remove('conv-item--active'));
+    item.classList.add('conv-item--active');
   }
 
-  // Function to remove empty message if it exists
-  function removeEmptyMessage() {
-    const emptyDiv = messagesContainer.querySelector('.empty');
-    if (emptyDiv) {
-      emptyDiv.remove();
-    }
-  }
+  // ── New chat button ───────────────────────────────────────────────────
+  newChatBtn.addEventListener('click', () => {
+    currentConvId = null;
+    msgContainer.innerHTML = `
+      <div class="empty" id="empty-state">
+        <img src="/static/images/logo.png" alt="Nature's Academy" width="100"/>
+        <h1>Welcome to Nature's Academy</h1>
+        <p>Ask me anything about our courses and programmes.</p>
+      </div>`;
+    convList.querySelectorAll('.conv-item').forEach(el => el.classList.remove('conv-item--active'));
+    messageInput.focus();
+    window.history.pushState({}, '', '/');
+  });
 
-  // Streaming message handler
-  async function sendMessageStream(message) {
-    try {
-      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+  // ── Load conversation on sidebar click ───────────────────────────────
+  convList.addEventListener('click', async (e) => {
+    const item = e.target.closest('.conv-item');
+    if (!item) return;
 
-      const response = await fetch('{% url "send_message_stream" %}', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': csrfToken,
-        },
-        body: JSON.stringify({message: message})
+    // Rename button
+    if (e.target.closest('.conv-rename')) {
+      const id = e.target.closest('.conv-rename').dataset.id;
+      const newTitle = prompt('Rename conversation:');
+      if (!newTitle || !newTitle.trim()) return;
+      const resp = await fetch(`/api/conversations/${id}/`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify({title: newTitle.trim()}),
       });
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
+      if (resp.ok) {
+        const data = await resp.json();
+        item.querySelector('.conv-title').textContent = data.title;
       }
+      return;
+    }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+    // Delete button
+    if (e.target.closest('.conv-delete')) {
+      const id = e.target.closest('.conv-delete').dataset.id;
+      if (!confirm('Delete this conversation?')) return;
+      const resp = await fetch(`/api/conversations/${id}/`, {
+        method: 'DELETE',
+        headers: {'X-CSRFToken': getCsrf()},
+      });
+      if (resp.ok) {
+        item.remove();
+        if (currentConvId === id) {
+          newChatBtn.click();
+        }
+        if (!convList.querySelector('.conv-item')) {
+          convList.innerHTML = '<li class="conv-empty" id="conv-empty">No conversations yet</li>';
+        }
+      }
+      return;
+    }
 
-      // Create streaming bubble
-      currentStreamingDiv = createStreamingBubble();
-      messagesContainer.appendChild(currentStreamingDiv);
-      scrollToBottom();
+    // Load conversation
+    const id = item.dataset.id;
+    if (id === currentConvId) return;
 
-      function readStream() {
-        return reader.read().then(({done, value}) => {
-          if (done) {
-            setLoadingState(false);
-            hideStatus();
-            return;
+    const resp = await fetch(`/api/conversations/${id}/`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    currentConvId = id;
+    msgContainer.innerHTML = '';
+    if (!data.messages.length) {
+      msgContainer.innerHTML = '<div class="empty" id="empty-state"><p>No messages yet.</p></div>';
+    } else {
+      data.messages.forEach(m => {
+        addBubble(m.role, m.role === 'user' ? escapedHtml(m.content) : m.content.replace(/\n/g,'<br>'));
+      });
+    }
+
+    convList.querySelectorAll('.conv-item').forEach(el => el.classList.remove('conv-item--active'));
+    item.classList.add('conv-item--active');
+    window.history.pushState({}, '', `/?conv=${id}`);
+  });
+
+  // ── CSRF helper ───────────────────────────────────────────────────────
+  function getCsrf() {
+    return document.querySelector('[name=csrfmiddlewaretoken]').value;
+  }
+
+  // ── Streaming send ────────────────────────────────────────────────────
+  async function sendStream(message) {
+    const resp = await fetch('{% url "send_message_stream" %}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({message, conversation_id: currentConvId}),
+    });
+    if (!resp.ok) throw new Error('Network error');
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+
+    currentBotDiv = createEmptyBotBubble();
+    const contentDiv = currentBotDiv.querySelector('.content');
+
+    const pump = () => reader.read().then(({done, value}) => {
+      if (done) { setLoading(false); hideStatus(); return; }
+
+      const text  = decoder.decode(value);
+      const lines = text.split('\n');
+      lines.forEach(line => {
+        if (!line.startsWith('data: ')) return;
+        try {
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'status')       { showStatus(ev.message); }
+          else if (ev.type === 'clear_status') { hideStatus(); }
+          else if (ev.type === 'content') {
+            contentDiv.innerHTML += ev.content.replace(/\n/g, '<br>');
+            scrollToBottom();
           }
-
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
-
-          lines.forEach(line => {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                
-                if (data.type === 'status') {
-                  showStatus(data.message);
-                } else if (data.type === 'clear_status') {
-                  hideStatus();
-                } else if (data.type === 'content') {
-                  if (currentStreamingDiv) {
-                    const contentDiv = currentStreamingDiv.querySelector('.content');
-                    contentDiv.innerHTML += data.content.replace(/\n/g, '<br>');
-                    scrollToBottom();
-                  }
-                } else if (data.type === 'done') {
-                  hideStatus();
-                  setLoadingState(false);
-                  console.log('Streaming complete:', data.response_type);
-                } else if (data.type === 'error') {
-                  hideStatus();
-                  if (currentStreamingDiv) {
-                    const contentDiv = currentStreamingDiv.querySelector('.content');
-                    contentDiv.innerHTML = 'Sorry, there was an error processing your message.';
-                  }
-                  setLoadingState(false);
-                }
-              } catch (e) {
-                console.error('Error parsing streaming data:', e);
-              }
-            }
-          });
-
-          return readStream();
-        });
-      }
-
-      return readStream();
-      
-    } catch (error) {
-      console.error('Streaming error:', error);
-      hideStatus();
-      if (currentStreamingDiv) {
-        const contentDiv = currentStreamingDiv.querySelector('.content');
-        contentDiv.innerHTML = 'Sorry, there was a network error. Please try again.';
-      }
-      setLoadingState(false);
-    }
-  }
-
-  // Regular (non-streaming) message handler
-  async function sendMessageRegular(message) {
-    try {
-      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-
-      const response = await fetch('{% url "send_message" %}', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': csrfToken,
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({message: message})
+          else if (ev.type === 'conversation_meta') {
+            currentConvId = ev.conversation_id;
+            upsertConvItem(ev.conversation_id, ev.conversation_title);
+            window.history.replaceState({}, '', `/?conv=${ev.conversation_id}`);
+          }
+          else if (ev.type === 'done')  { hideStatus(); setLoading(false); }
+          else if (ev.type === 'error') {
+            hideStatus();
+            contentDiv.innerHTML = '<em>Sorry, an error occurred. Please try again.</em>';
+            setLoading(false);
+          }
+        } catch (e) { /* partial chunk */ }
       });
-
-      const data = await response.json();
-
-      if (data.success) {
-        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', data.assistant_message));
-        scrollToBottom();
-      } else {
-        console.error('Error:', data.error);
-        messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was an error processing your message.'));
-        scrollToBottom();
-      }
-    } catch (error) {
-      console.error('Network error:', error);
-      messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('assistant', 'Sorry, there was a network error. Please try again.'));
-      scrollToBottom();
-    }
+      return pump();
+    });
+    return pump();
   }
 
-  // Handle form submission
-  chatForm.addEventListener('submit', async function(e) {
+  // ── Regular (non-streaming) fallback ─────────────────────────────────
+  async function sendRegular(message) {
+    const resp = await fetch('{% url "send_message" %}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf(), 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({message, conversation_id: currentConvId}),
+    });
+    const data = await resp.json();
+    if (data.success) {
+      addBubble('bot', data.assistant_message.replace(/\n/g, '<br>'));
+      currentConvId = data.conversation_id;
+      upsertConvItem(data.conversation_id, data.conversation_title);
+      window.history.replaceState({}, '', `/?conv=${data.conversation_id}`);
+    } else {
+      addBubble('bot', '<em>Sorry, an error occurred.</em>');
+    }
+    setLoading(false);
+  }
+
+  // ── Form submit ───────────────────────────────────────────────────────
+  chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    
     const message = messageInput.value.trim();
     if (!message || isStreaming) return;
 
-    // Remove empty message if present
-    removeEmptyMessage();
-
-    // Add user message to UI immediately
-    messagesContainer.insertAdjacentHTML('beforeend', createMessageBubble('user', message));
-    scrollToBottom();
-
-    // Clear input
+    removeEmptyState();
+    addBubble('user', escapedHtml(message));
     messageInput.value = '';
+    setLoading(true);
 
-    // Set loading state for streaming
-    setLoadingState(true, true);
-
-    // Use streaming by default, fall back to regular if needed
     try {
-      await sendMessageStream(message);
-    } catch (error) {
-      console.log('Streaming failed, falling back to regular request');
-      setLoadingState(true, false);
-      showPageLoader(true);
-      await sendMessageRegular(message);
-      setLoadingState(false);
-      showPageLoader(false);
+      await sendStream(message);
+    } catch (err) {
+      console.warn('Streaming failed, falling back:', err);
+      await sendRegular(message);
     }
-
-    // Focus back to input
     messageInput.focus();
   });
 
-  // Allow Enter key to submit (optional enhancement)
-  messageInput.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      chatForm.dispatchEvent(new Event('submit'));
-    }
+  // Enter to submit
+  messageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatForm.dispatchEvent(new Event('submit')); }
   });
 
-  // Handle stop button (optional - stop streaming)
-  sendBtn.addEventListener('click', function(e) {
-    if (isStreaming) {
-      e.preventDefault();
-      // Could implement stream cancellation here if needed
-      setLoadingState(false);
-      hideStatus();
-    }
+  // Stop button
+  sendBtn.addEventListener('click', (e) => {
+    if (isStreaming) { e.preventDefault(); setLoading(false); hideStatus(); }
   });
 
-  // Focus input on page load
+  // Initial setup
+  scrollToBottom();
   messageInput.focus();
-  
-  // Add resize observer to handle dynamic content changes
-  if (window.ResizeObserver) {
-    const resizeObserver = new ResizeObserver(() => {
-      scrollToBottom();
-    });
-    resizeObserver.observe(messagesContainer);
+
+  // ── Sidebar toggle: collapse on desktop, slide on mobile ─────
+  const sidebarEl = document.getElementById('sidebar');
+  const toggleBtn = document.getElementById('sidebar-toggle');
+  const overlayEl = document.getElementById('sidebar-overlay');
+
+  const MOBILE_BP = 768;
+
+  function isMobile() { return window.innerWidth <= MOBILE_BP; }
+
+  function openSidebar() {
+    if (isMobile()) {
+      sidebarEl.classList.add('sidebar--mobile-open');
+      overlayEl.classList.add('sidebar-overlay--visible');
+    } else {
+      sidebarEl.classList.remove('sidebar--collapsed');
+    }
   }
-  
-  // Handle window resize to maintain scroll position
+
+  function closeSidebar() {
+    if (isMobile()) {
+      sidebarEl.classList.remove('sidebar--mobile-open');
+      overlayEl.classList.remove('sidebar-overlay--visible');
+    } else {
+      sidebarEl.classList.add('sidebar--collapsed');
+    }
+  }
+
+  function isSidebarOpen() {
+    return isMobile()
+      ? sidebarEl.classList.contains('sidebar--mobile-open')
+      : !sidebarEl.classList.contains('sidebar--collapsed');
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    isSidebarOpen() ? closeSidebar() : openSidebar();
+  });
+
+  overlayEl.addEventListener('click', closeSidebar);
+
+  // On mobile, close sidebar after picking a conversation
+  convList.addEventListener('click', () => {
+    if (isMobile()) closeSidebar();
+  });
+
+  // On resize from mobile → desktop, clean up mobile classes
   window.addEventListener('resize', () => {
-    setTimeout(() => scrollToBottom(), 100);
+    if (!isMobile()) {
+      sidebarEl.classList.remove('sidebar--mobile-open');
+      overlayEl.classList.remove('sidebar-overlay--visible');
+    }
   });
 });
 </script>
