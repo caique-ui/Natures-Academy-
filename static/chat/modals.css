@@ -1,0 +1,316 @@
+/* ============================================================
+   modals.css — Nature's Academy modal system
+   Save to: static/chat/modals.css
+   All colours from :root in styles.css
+   ============================================================ */
+
+/* ── Base: hidden by default ────────────────────────────────── */
+
+.na-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.na-modal.is-open {
+  display: flex;
+}
+
+/* ── Backdrop ────────────────────────────────────────────────── */
+
+.na-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(7, 22, 38, 0.72);
+  backdrop-filter: blur(3px);
+  animation: backdropIn 0.18s ease;
+}
+
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Box ─────────────────────────────────────────────────────── */
+
+.na-modal__box {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  background: #1a2e42;          /* slightly lighter than --panel */
+  border: 1px solid rgba(135, 159, 172, 0.18);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: boxIn 0.2s cubic-bezier(0.34, 1.36, 0.64, 1);
+}
+
+.na-modal__box--sm {
+  max-width: 340px;
+}
+
+@keyframes boxIn {
+  from { opacity: 0; transform: scale(0.94) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);   }
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+
+.na-modal__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(135, 159, 172, 0.1);
+}
+
+.na-modal__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(126, 172, 154, 0.15);
+  color: #7eac9a;               /* --bubble */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.na-modal__icon--danger {
+  background: rgba(239, 100, 100, 0.12);
+  color: #ef6464;
+}
+
+.na-modal__title {
+  flex: 1;
+  font-family: 'Heiti SC', sans-serif;
+  font-weight: 400;
+  font-size: 1rem;
+  color: #ffffff;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.na-modal__close {
+  background: none;
+  border: none;
+  color: #879fac;               /* --muted */
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  transition: background 0.14s, color 0.14s;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0;
+}
+.na-modal__close:hover {
+  background: rgba(239, 100, 100, 0.12);
+  color: #ef6464;
+}
+
+/* ── Body ────────────────────────────────────────────────────── */
+
+.na-modal__body {
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.na-modal__label {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #879fac;               /* --muted */
+  display: block;
+}
+
+.na-modal__input {
+  width: 100%;
+  background: #2d4255;          /* --question-box approx */
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: #ffffff;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.95rem;
+  padding: 11px 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+.na-modal__input::placeholder { color: #879fac; opacity: 0.6; }
+.na-modal__input:focus {
+  border-color: rgba(126, 172, 154, 0.5);
+  box-shadow: 0 0 0 3px rgba(126, 172, 154, 0.1);
+}
+.na-modal__input--error {
+  border-color: rgba(239, 100, 100, 0.5) !important;
+}
+
+.na-modal__error {
+  font-size: 0.76rem;
+  color: #f8a0a0;
+  min-height: 16px;
+  display: block;
+}
+
+.na-modal__text {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.88rem;
+  color: #e0e0e0;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.na-modal__hint {
+  font-size: 0.76rem;
+  color: #879fac;
+  display: block;
+}
+
+/* ── Folder picker list (move modal) ─────────────────────────── */
+
+.na-modal__folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-top: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #879fac transparent;
+}
+
+.na-modal__folder-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 0.14s, border-color 0.14s;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.85rem;
+  color: #e0e0e0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.na-modal__folder-option:hover {
+  background: rgba(126, 172, 154, 0.1);
+  border-color: rgba(126, 172, 154, 0.2);
+}
+
+.na-modal__folder-option.is-current {
+  background: rgba(139, 157, 141, 0.1);
+  border-color: rgba(139, 157, 141, 0.2);
+  color: #879fac;
+  cursor: default;
+}
+
+.na-modal__folder-option i {
+  font-size: 0.85rem;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.na-modal__folder-option .folder-opt-icon   { color: #8b9d8d; }  /* --accent */
+.na-modal__folder-option .folder-opt-unfiled { color: #879fac; }  /* --muted  */
+.na-modal__folder-option .folder-opt-name   { flex: 1; }
+
+.na-modal__folder-option .folder-opt-check {
+  color: #7eac9a;
+  font-size: 0.75rem;
+  opacity: 0;
+}
+.na-modal__folder-option.is-current .folder-opt-check { opacity: 1; }
+
+/* ── Footer ──────────────────────────────────────────────────── */
+
+.na-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 18px;
+  border-top: 1px solid rgba(135, 159, 172, 0.1);
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.na-modal__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: none;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.14s, box-shadow 0.14s, transform 0.08s;
+}
+
+.na-modal__btn:active { transform: scale(0.98); }
+
+.na-modal__btn--ghost {
+  background: rgba(135, 159, 172, 0.1);
+  color: #879fac;
+}
+.na-modal__btn--ghost:hover {
+  background: rgba(135, 159, 172, 0.18);
+  color: #ffffff;
+}
+
+.na-modal__btn--primary {
+  background: #7eac9a;          /* --bubble */
+  color: #0b2941;               /* --bg */
+}
+.na-modal__btn--primary:hover {
+  background: #8ec2af;
+  box-shadow: 0 4px 14px rgba(126, 172, 154, 0.3);
+}
+
+.na-modal__btn--danger {
+  background: rgba(239, 100, 100, 0.15);
+  color: #ef6464;
+  border: 1px solid rgba(239, 100, 100, 0.3);
+}
+.na-modal__btn--danger:hover {
+  background: rgba(239, 100, 100, 0.28);
+  box-shadow: 0 4px 14px rgba(239, 100, 100, 0.2);
+}
+
+.na-modal__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────── */
+
+@media (max-width: 480px) {
+  .na-modal__box { border-radius: 14px; }
+  .na-modal__footer { flex-direction: column-reverse; }
+  .na-modal__btn { width: 100%; justify-content: center; }
+}

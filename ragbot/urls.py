@@ -23,4 +23,8 @@ urlpatterns = [
     # ── Existing ─────────────────────────────────────────────────────────
     path("reindex/",                          views.reindex,    name="reindex"),
     path("webhooks/drive/notify/",            drive_webhook,    name="drive_webhook"),
+
+    # ── Folders ───────────────────────────────────────────────────────────
+    path("api/folders/",                          views.folder_list,   name="folder_list"),
+    path("api/folders/<uuid:folder_id>/",         views.folder_detail, name="folder_detail"),
 ]

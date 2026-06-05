@@ -1,0 +1,25 @@
+{# templates/chat/modals/modal_new_folder.html #}
+<div class="na-modal" id="modal-new-folder" role="dialog" aria-modal="true" aria-labelledby="modal-new-folder-title">
+  <div class="na-modal__backdrop"></div>
+  <div class="na-modal__box">
+    <div class="na-modal__header">
+      <span class="na-modal__icon"><i class="fa-solid fa-folder-plus"></i></span>
+      <h2 class="na-modal__title" id="modal-new-folder-title">New Folder</h2>
+      <button class="na-modal__close" data-dismiss="modal-new-folder" aria-label="Close">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="na-modal__body">
+      <label class="na-modal__label" for="new-folder-name">Folder name</label>
+      <input class="na-modal__input" id="new-folder-name" type="text"
+             placeholder="e.g. Product Questions" maxlength="100" autocomplete="off" />
+      <span class="na-modal__error" id="new-folder-error"></span>
+    </div>
+    <div class="na-modal__footer">
+      <button class="na-modal__btn na-modal__btn--ghost" data-dismiss="modal-new-folder">Cancel</button>
+      <button class="na-modal__btn na-modal__btn--primary" id="new-folder-confirm">
+        <i class="fa-solid fa-folder-plus"></i> Create folder
+      </button>
+    </div>
+  </div>
+</div>

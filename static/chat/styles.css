@@ -457,7 +457,7 @@ button{
 .app-shell {
   display: flex;
   /* 100vh minus the topbar height (topbar is ~74px with padding) */
-  height: calc(100vh - 75px);
+  height: calc(100vh - 74px);
   overflow: hidden;
   background: var(--bg);
 }
@@ -969,6 +969,196 @@ button{
   color: var(--fg);
 }
 
+/* ── Sidebar body (scrollable middle) ───────────────────────── */
+
+.sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+.sidebar-body::-webkit-scrollbar { width: 4px; }
+.sidebar-body::-webkit-scrollbar-track { background: transparent; }
+.sidebar-body::-webkit-scrollbar-thumb { background: rgba(135,159,172,0.3); border-radius: 2px; }
+
+/* Remove old conv-list scroll — body handles it now */
+.conv-list { overflow-y: visible; flex: unset; padding: 2px 6px 4px; }
+
+/* ── Sidebar header actions (multiple icon buttons) ─────────── */
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-icon-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  transition: background 0.15s, color 0.15s;
+  /* override global button styles */
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.sidebar-icon-btn:hover { background: rgba(139,157,141,0.15); color: var(--fg); }
+
+/* ── Folder group ────────────────────────────────────────────── */
+
+.folder-group {
+  margin: 2px 6px;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px 7px 4px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  position: relative;
+}
+.folder-header:hover { background: rgba(135,159,172,0.08); }
+
+.folder-toggle {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.folder-chevron {
+  font-size: 0.6rem;
+  transition: transform 0.2s ease;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* Expanded state — chevron points down */
+.folder-group:not(.folder-group--collapsed) .folder-chevron {
+  transform: rotate(90deg);
+}
+
+.folder-icon {
+  font-size: 0.82rem;
+  color: var(--accent);       /* sage green */
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+/* Open folder gets teal icon */
+.folder-group:not(.folder-group--collapsed) .folder-icon {
+  color: var(--bubble);
+}
+
+.folder-name {
+  flex: 1;
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.9;
+  min-width: 0;
+}
+
+/* ── Folder action buttons (rename / delete) ─────────────────── */
+
+.folder-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.folder-header:hover .folder-actions { display: flex; }
+
+.folder-action-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  transition: background 0.12s, color 0.12s;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.folder-rename-btn:hover { background: rgba(139,157,141,0.2); color: var(--bubble); }
+.folder-delete-btn:hover { background: rgba(239,100,100,0.12); color: #ef6464; }
+
+/* ── Conversations inside folder ─────────────────────────────── */
+
+.folder-conv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 4px 22px;   /* indent under folder icon */
+  overflow: hidden;
+  max-height: 2000px;
+  transition: max-height 0.25s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+
+/* Collapsed state */
+.folder-group--collapsed .folder-conv-list {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.conv-empty-folder {
+  font-family: 'Heiti SC', sans-serif;
+  font-size: 0.74rem;
+  color: var(--muted);
+  opacity: 0.38;
+  padding: 6px 10px;
+  font-style: italic;
+}
+
+/* ── Move button on conv-item ────────────────────────────────── */
+
+.conv-move {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  transition: background 0.12s, color 0.12s;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.conv-move:hover { background: rgba(139,157,141,0.2); color: var(--bubble); }
 
 /* ============================================================
    AUTH PAGES (login + register)

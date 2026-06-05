@@ -1,0 +1,25 @@
+{# templates/chat/modals/modal_rename_folder.html #}
+<div class="na-modal" id="modal-rename-folder" role="dialog" aria-modal="true" aria-labelledby="modal-rename-folder-title">
+  <div class="na-modal__backdrop"></div>
+  <div class="na-modal__box">
+    <div class="na-modal__header">
+      <span class="na-modal__icon"><i class="fa-solid fa-pencil"></i></span>
+      <h2 class="na-modal__title" id="modal-rename-folder-title">Rename Folder</h2>
+      <button class="na-modal__close" data-dismiss="modal-rename-folder" aria-label="Close">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="na-modal__body">
+      <label class="na-modal__label" for="rename-folder-name">New name</label>
+      <input class="na-modal__input" id="rename-folder-name" type="text"
+             maxlength="100" autocomplete="off" />
+      <span class="na-modal__error" id="rename-folder-error"></span>
+    </div>
+    <div class="na-modal__footer">
+      <button class="na-modal__btn na-modal__btn--ghost" data-dismiss="modal-rename-folder">Cancel</button>
+      <button class="na-modal__btn na-modal__btn--primary" id="rename-folder-confirm">
+        <i class="fa-solid fa-check"></i> Save
+      </button>
+    </div>
+  </div>
+</div>

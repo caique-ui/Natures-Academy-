@@ -1,0 +1,118 @@
+<aside class="sidebar" id="sidebar">
+
+    <div class="sidebar-header">
+      <span class="sidebar-logo">Nature's Academy</span>
+      <div class="sidebar-header-actions">
+        {% if user.is_authenticated %}
+        <button class="sidebar-icon-btn" id="new-folder-btn" title="New folder">
+          <i class="fa-solid fa-folder-plus"></i>
+        </button>
+        {% endif %}
+        <button class="sidebar-icon-btn" id="new-chat-btn" title="New conversation">
+          <i class="fa-solid fa-pen-to-square"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-body" id="sidebar-body">
+
+      {% if user.is_authenticated %}
+        {% for folder in sidebar.folders %}
+        <div class="folder-group" data-folder-id="{{ folder.id }}" id="folder-{{ folder.id }}">
+          <div class="folder-header">
+            <button class="folder-toggle" data-folder-id="{{ folder.id }}">
+              <i class="fa-solid fa-chevron-right folder-chevron"></i>
+            </button>
+            <i class="fa-solid fa-folder folder-icon"></i>
+            <span class="folder-name" title="{{ folder.name }}">{{ folder.name }}</span>
+            <div class="folder-actions">
+              <button class="folder-action-btn folder-new-conv-btn" data-folder-id="{{ folder.id }}" title="New conversation in folder">
+                <i class="fa-solid fa-pen-to-square"></i>
+              </button>
+              <button class="folder-action-btn folder-rename-btn" data-folder-id="{{ folder.id }}" title="Rename folder">
+                <i class="fa-solid fa-pencil"></i>
+              </button>
+              <button class="folder-action-btn folder-delete-btn" data-folder-id="{{ folder.id }}" title="Delete folder">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            </div>
+          </div>
+          <ul class="folder-conv-list" id="folder-convs-{{ folder.id }}">
+            {% for conv in folder.conversations %}
+            <li class="conv-item {% if conv.id == active_conv_id %}conv-item--active{% endif %}"
+                data-id="{{ conv.id }}" data-folder-id="{{ folder.id }}">
+              <span class="conv-title" title="{{ conv.title }}">{{ conv.title }}</span>
+              <div class="conv-actions">
+                <button class="conv-move"   data-id="{{ conv.id }}" title="Move"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+                <button class="conv-rename" data-id="{{ conv.id }}" title="Rename"><i class="fa-solid fa-pencil"></i></button>
+                <button class="conv-delete" data-id="{{ conv.id }}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+              </div>
+            </li>
+            {% empty %}
+            <li class="conv-empty-folder">No conversations yet</li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endfor %}
+
+        {% if sidebar.unfiled %}
+        <div class="sidebar-section-label" style="margin-top:6px;">Recent</div>
+        {% endif %}
+      {% endif %}
+
+      <ul class="conv-list" id="conv-list">
+        {% for conv in sidebar.unfiled %}
+        <li class="conv-item {% if conv.id == active_conv_id %}conv-item--active{% endif %}"
+            data-id="{{ conv.id }}" data-folder-id="">
+          <span class="conv-title" title="{{ conv.title }}">{{ conv.title }}</span>
+          <div class="conv-actions">
+            {% if user.is_authenticated %}
+            <button class="conv-move" data-id="{{ conv.id }}" title="Move"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+            {% endif %}
+            <button class="conv-rename" data-id="{{ conv.id }}" title="Rename"><i class="fa-solid fa-pencil"></i></button>
+            <button class="conv-delete" data-id="{{ conv.id }}" title="Delete"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        </li>
+        {% empty %}
+        {% if not sidebar.folders %}
+        <li class="conv-empty" id="conv-empty">No conversations yet</li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+
+    </div>{# /sidebar-body #}
+
+    {# ── Auth footer ── #}
+    <div class="sidebar-footer">
+      {% if user.is_authenticated %}
+        <div class="sidebar-user">
+          <div class="sidebar-user-avatar">{{ user.username|first|upper }}</div>
+          <div class="sidebar-user-info">
+            <span class="sidebar-user-name">{{ user.username }}</span>
+            <span class="sidebar-user-status">Signed in</span>
+          </div>
+          <form method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="sidebar-signout" title="Sign out">
+              <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            </button>
+          </form>
+        </div>
+      {% else %}
+        <div class="sidebar-guest">
+          <div class="sidebar-guest-icon"><i class="fa-solid fa-circle-user"></i></div>
+          <div class="sidebar-guest-info">
+            <span class="sidebar-guest-label">Guest</span>
+            <span class="sidebar-guest-hint">Sign in to use folders</span>
+          </div>
+        </div>
+        <div class="sidebar-auth-actions">
+          <a href="{% url 'login' %}" class="sidebar-auth-btn sidebar-auth-btn--login">
+            <i class="fa-solid fa-right-to-bracket"></i> Sign in
+          </a>
+          <!--<a href="{% url 'register' %}" class="sidebar-auth-btn sidebar-auth-btn--register">Register</a>-->
+        </div>
+      {% endif %}
+    </div>
+
+  </aside>

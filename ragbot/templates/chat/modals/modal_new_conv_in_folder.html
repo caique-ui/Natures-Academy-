@@ -1,0 +1,27 @@
+{# templates/chat/modals/modal_new_conv_in_folder.html #}
+<div class="na-modal" id="modal-new-conv-in-folder" role="dialog" aria-modal="true" aria-labelledby="modal-new-conv-title">
+  <div class="na-modal__backdrop"></div>
+  <div class="na-modal__box">
+    <div class="na-modal__header">
+      <span class="na-modal__icon"><i class="fa-solid fa-pen-to-square"></i></span>
+      <h2 class="na-modal__title" id="modal-new-conv-title">New Conversation</h2>
+      <button class="na-modal__close" data-dismiss="modal-new-conv-in-folder" aria-label="Close">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="na-modal__body">
+      <p class="na-modal__text">
+        Create a new conversation in <strong id="new-conv-folder-name"></strong>?
+      </p>
+      <p class="na-modal__hint" style="margin-top:6px;">
+        You can also start typing right away — the first message will name the conversation.
+      </p>
+    </div>
+    <div class="na-modal__footer">
+      <button class="na-modal__btn na-modal__btn--ghost" data-dismiss="modal-new-conv-in-folder">Cancel</button>
+      <button class="na-modal__btn na-modal__btn--primary" id="new-conv-in-folder-confirm">
+        <i class="fa-solid fa-pen-to-square"></i> Start conversation
+      </button>
+    </div>
+  </div>
+</div>

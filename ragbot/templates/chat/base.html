@@ -6,6 +6,7 @@
   <title>Nature's Academy</title>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/chat/styles.css" />
+  <link rel="stylesheet" href="/static/chat/modals.css" />
   <link rel="shortcut icon" href="/static/images/favicon.ico" type="image/x-icon">
   <link href="/static/fontawesome/css/fontawesome.css" rel="stylesheet" />
   <link href="/static/fontawesome/css/brands.css" rel="stylesheet" />
@@ -16,16 +17,22 @@
 <body>
 <header class="topbar">
   <div class="topbar-left">
-    {# Sidebar toggle — only rendered on chat page via block, empty elsewhere #}
     {% block topbar_toggle %}{% endblock %}
     <div class="brand">Nature's Academy</div>
   </div>
-  <!--<form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
+  <!-- <form action="{% url 'reset_chat' %}" method="post">{% csrf_token %}
     <button class="btn secondary" title="Clear Conversation">CLEAR Conversation</button>
-  </form>-->
+  </form> -->
+  {% block topbar_actions %}{% endblock %}
 </header>
 <main class="main-content">
   {% block content %}{% endblock %}
 </main>
+
+{# jQuery — loaded once at base level, available to all pages #}
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"
+        integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
+        crossorigin="anonymous"></script>
+{% block extra_js %}{% endblock %}
 </body>
 </html>

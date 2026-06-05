@@ -1,0 +1,25 @@
+{# templates/chat/modals/modal_delete_folder.html #}
+<div class="na-modal" id="modal-delete-folder" role="dialog" aria-modal="true" aria-labelledby="modal-delete-folder-title">
+  <div class="na-modal__backdrop"></div>
+  <div class="na-modal__box na-modal__box--sm">
+    <div class="na-modal__header">
+      <span class="na-modal__icon na-modal__icon--danger"><i class="fa-solid fa-trash"></i></span>
+      <h2 class="na-modal__title" id="modal-delete-folder-title">Delete Folder</h2>
+      <button class="na-modal__close" data-dismiss="modal-delete-folder" aria-label="Close">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="na-modal__body">
+      <p class="na-modal__text">
+        Delete <strong id="delete-folder-name-display"></strong>?<br>
+        <span class="na-modal__hint">Conversations inside will become unfiled — nothing will be lost.</span>
+      </p>
+    </div>
+    <div class="na-modal__footer">
+      <button class="na-modal__btn na-modal__btn--ghost" data-dismiss="modal-delete-folder">Cancel</button>
+      <button class="na-modal__btn na-modal__btn--danger" id="delete-folder-confirm">
+        <i class="fa-solid fa-trash"></i> Delete
+      </button>
+    </div>
+  </div>
+</div>
