@@ -104,6 +104,10 @@ class Command(BaseCommand):
                     overlap=opts["overlap"],
                 )
 
+                # NOTE: `text` key in metadatas is no longer used by add_texts()
+                # (the original chunk text is taken from the `chunks` list arg),
+                # but it is kept here for backward compatibility with any other
+                # consumers of this metadata dict.
                 metadatas = [
                     {
                         "source_id":   meta["id"],

@@ -67,7 +67,7 @@ DATABASES = {
         "HOST":     os.getenv("DB_HOST"),
         "PORT":     os.getenv("DB_PORT"),
         "OPTIONS": {
-            'sslmode': os.getenv("SSLMODE",     default="disable"),
+            'sslmode': os.getenv("SSLMODE", default="disable"),
         },
     }
 }
@@ -83,80 +83,101 @@ STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]
 
-# RAG settings
-VECTORSTORE_PATH =  os.getenv("VECTORSTORE_PATH")
-DOCSTORE_PATH =  os.getenv("DOCSTORE_PATH")
-OPENAI_CHAT_MODEL =  os.getenv("OPENAI_CHAT_MODEL")
-OPENAI_EMBED_MODEL =  os.getenv("OPENAI_EMBED_MODEL")
+# ---------------------------------------------------------------------------
+# RAG / OpenAI
+# ---------------------------------------------------------------------------
 
+# IMPORTANT: these must be set in your .env file.
+# OPENAI_CHAT_MODEL and OPENAI_EMBED_MODEL are both read here — if either is
+# missing the app will raise AttributeError at request time, not at startup.
+# Recommended .env values:
+#   OPENAI_CHAT_MODEL=gpt-4o-mini
+#   OPENAI_EMBED_MODEL=text-embedding-3-small
+
+OPENAI_CHAT_MODEL  = os.getenv("OPENAI_CHAT_MODEL")
+OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+
+# When True, uses pgvector SQL queries instead of in-process FAISS.
+# Requires: pip install pgvector django-pgvector and DocumentChunk.embedding
+# swapped for pgvector.VectorField.  Leave False unless you have pgvector set up.
+VECTORSTORE_USE_PGVECTOR = os.getenv("VECTORSTORE_USE_PGVECTOR", "false").lower() == "true"
+
+# Legacy paths (unused by the DB vector store; kept for any other consumers)
+VECTORSTORE_PATH = os.getenv("VECTORSTORE_PATH")
+DOCSTORE_PATH    = os.getenv("DOCSTORE_PATH")
+
+# ---------------------------------------------------------------------------
 # Google Drive
-GDRIVE_TOKEN_PATH =  os.getenv("GDRIVE_TOKEN_PATH")
-GDRIVE_SERVICE_ACCOUNT_PATH =  os.getenv("GDRIVE_SERVICE_ACCOUNT_PATH")
+# ---------------------------------------------------------------------------
 
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+GDRIVE_TOKEN_PATH            = os.getenv("GDRIVE_TOKEN_PATH")
+GDRIVE_SERVICE_ACCOUNT_PATH  = os.getenv("GDRIVE_SERVICE_ACCOUNT_PATH")
+GDRIVE_DEFAULT_FOLDER_ID     = os.getenv(
+    "GDRIVE_DEFAULT_FOLDER_ID",
+    "1PJThx7zpjsxbFHyz1GYYGugjxi0Zd4GP",   # override in .env for production
+)
 
-# settings.py
-USE_IVF_INDEX = True  # For datasets > 1000 documents
-OPENAI_EMBED_MODEL = "text-embedding-3-small"  # Fastest OpenAI model
-#OPENAI_EMBED_MODEL = "gpt-3.5-turbo"
-
-GDRIVE_DEFAULT_FOLDER_ID = "1PJThx7zpjsxbFHyz1GYYGugjxi0Zd4GP"  # Replace with your default folder ID
-#GDRIVE_DEFAULT_FOLDER_ID = "0BzD0CeOiG_b2TUxtRGs0SEJmWW8"
-
-## ============================================================
-# Additions to settings.py
-# ============================================================
-
-# --- Celery broker (Redis) ---
-CELERY_BROKER_URL        = "redis://localhost:6379/0"
-CELERY_RESULT_BACKEND    = "redis://localhost:6379/0"
-CELERY_TASK_SERIALIZER   = "json"
-CELERY_RESULT_SERIALIZER = "json"
-CELERY_ACCEPT_CONTENT    = ["json"]
-CELERY_TIMEZONE          = "UTC"
-DRIVE_DEBOUNCE_SECONDS = 30
-# Auth: uses ADC (Application Default Credentials)
-# Locally: run `gcloud auth application-default login`
-# On GCP:  attach a service account to your VM/container — no config needed
+# ---------------------------------------------------------------------------
+# Chunking defaults (used by ingest_gdrive and any auto-sync tasks)
+# ---------------------------------------------------------------------------
 
 CHUNK_MAX_CHARS = 1500
 CHUNK_OVERLAP   = 150
 
-# Webhook settings (only needed if using Drive push notifications)
-DRIVE_WEBHOOK_URL   = "https://natures-academy.com/webhooks/drive/notify/"
-DRIVE_WEBHOOK_TOKEN = "your-secret-token"   # set after running --register-watch
-DRIVE_CHANNEL_ID    = ""                    # set after running --register-watch
-DRIVE_RESOURCE_ID   = ""                    # set after running --register-watch
-
-# --- Celery Beat schedule ---
-# Controls when check_drive_changes_task runs automatically
-# from celery.schedules import crontab
-
-"""CELERY_BEAT_SCHEDULE = {
-    # Check Drive for changes every hour
-    "check-drive-changes-hourly": {
-        "task":     "ragbot.tasks.check_drive_changes_task",
-        "schedule": crontab(minute=0),          # top of every hour
-        "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
-    },
-    "force-sync-weekly": {
-        "task":     "ragbot.tasks.debounced_index_task",
-        "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
-        "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
-    },
-}"""
-APP_ENV=os.getenv("APP_ENV", "live")
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-
-
-#================================================
-
-# Session: anonymous users lose history on browser close
-SESSION_EXPIRE_AT_BROWSER_CLOSE = True   # anon sessions die with the tab
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 7   # 7 days for authenticated users
-
-LOGIN_URL      = "/auth/login/"
-LOGIN_REDIRECT_URL = "/"
-LOGOUT_REDIRECT_URL = "/"
+# ---------------------------------------------------------------------------
+# Web scraping
+# ---------------------------------------------------------------------------
 
 SCRAPING_URL = 'https://legislation.nsw.gov.au/view/html/inforce/current/sl-2011-0653'
+
+# ---------------------------------------------------------------------------
+# Drive webhook / sync
+# ---------------------------------------------------------------------------
+
+DRIVE_WEBHOOK_URL    = "https://natures-academy.com/webhooks/drive/notify/"
+DRIVE_WEBHOOK_TOKEN  = os.getenv("DRIVE_WEBHOOK_TOKEN", "your-secret-token")
+DRIVE_CHANNEL_ID     = os.getenv("DRIVE_CHANNEL_ID", "")
+DRIVE_RESOURCE_ID    = os.getenv("DRIVE_RESOURCE_ID", "")
+DRIVE_DEBOUNCE_SECONDS = int(os.getenv("DRIVE_DEBOUNCE_SECONDS", "30"))
+
+# ---------------------------------------------------------------------------
+# Celery / Redis
+# ---------------------------------------------------------------------------
+
+CELERY_BROKER_URL        = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND    = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+CELERY_TASK_SERIALIZER   = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT    = ["json"]
+CELERY_TIMEZONE          = "UTC"
+CELERY_BEAT_SCHEDULER    = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Uncomment and configure to enable automatic Drive sync via Celery Beat:
+# from celery.schedules import crontab
+# CELERY_BEAT_SCHEDULE = {
+#     "check-drive-changes-hourly": {
+#         "task":     "ragbot.tasks.check_drive_changes_task",
+#         "schedule": crontab(minute=0),
+#         "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
+#     },
+#     "force-sync-weekly": {
+#         "task":     "ragbot.tasks.debounced_index_task",
+#         "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
+#         "kwargs":   {"folder_id": GDRIVE_DEFAULT_FOLDER_ID},
+#     },
+# }
+
+# ---------------------------------------------------------------------------
+# Sessions / auth
+# ---------------------------------------------------------------------------
+
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True   # anonymous sessions die with the tab
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 7   # 7 days for authenticated users
+
+LOGIN_URL           = "/auth/login/"
+LOGIN_REDIRECT_URL  = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+APP_ENV = os.getenv("APP_ENV", "live")
