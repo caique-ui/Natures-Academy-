@@ -289,11 +289,6 @@ class DBVectorStore:
         return IndexVersion.objects.filter(
             folder_id=self.folder_id, is_active=True
         ).first()
-    
-    def _get_target_version_web(self) -> Optional[IndexVersion]:
-        return IndexVersion.objects.filter(
-            folder_name=settings.SCRAPING_URL, is_active=True
-        ).first()
 
     def _search_faiss(
         self,
@@ -303,15 +298,14 @@ class DBVectorStore:
     ) -> List[Tuple[float, Dict]]:
         """Load embeddings into a local FAISS index, then search."""
         version = self._get_target_version(version_id)
-        version_web = self._get_target_version_web()
-        if version is None and version_web is None:
+        if version is None:
             print("No active version found.")
             return []
 
         with self._lock:
             # Rebuild FAISS index if the active version changed
             if self._faiss_loaded_version_id != version.pk:
-                self._build_faiss_index([version, version_web][version_web is not None])
+                self._build_faiss_index(version)
 
             if self._faiss_index is None or self._faiss_index.ntotal == 0:
                 return []
@@ -342,21 +336,14 @@ class DBVectorStore:
 
         return results
 
-    def _build_faiss_index(self, version: List[IndexVersion]|IndexVersion):
+    def _build_faiss_index(self, version: IndexVersion):
         """(Re-)build the in-memory FAISS index from DB rows for a version."""
         print(f"Loading embeddings for version v{version.version_number} into FAISS…")
-        if isinstance(version, list):
-            chunks = list(
-                DocumentChunk.objects.filter(version__in=version)
-                .order_by("pk")
-                .only("pk", "embedding")
-            )
-        else:
-            chunks = list(
-                DocumentChunk.objects.filter(version=version)
-                .order_by("pk")
-                .only("pk", "embedding")
-            )
+        chunks = list(
+            DocumentChunk.objects.filter(version=version)
+            .order_by("pk")
+            .only("pk", "embedding")
+        )
         if not chunks:
             self._faiss_index = faiss.IndexFlatIP(self.dim)
             self._faiss_chunk_ids = []
@@ -391,15 +378,14 @@ class DBVectorStore:
         from pgvector.django import CosineDistance  # type: ignore
 
         version = self._get_target_version(version_id)
-        version_web = self._get_target_version_web()
-        if version is None and version_web is None:
+        if version is None:
             return []
 
         qv = self.embed([query])[0].tolist()
 
         qs = (
             DocumentChunk.objects
-            .filter(version__in=[version, version_web] if version_web else [version])
+            .filter(version=version)
             .select_related("document")
             .annotate(distance=CosineDistance("embedding", qv))
             .order_by("distance")[:k]

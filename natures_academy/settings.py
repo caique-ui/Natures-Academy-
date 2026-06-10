@@ -159,3 +159,4 @@ LOGIN_URL      = "/auth/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
 
+SCRAPING_URL = 'https://legislation.nsw.gov.au/view/html/inforce/current/sl-2011-0653'

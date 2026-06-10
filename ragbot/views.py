@@ -1,4 +1,4 @@
-# ragbot/views.py — with folders support
+# ragbot/views.py — with folders support + sources page
 
 from __future__ import annotations
 
@@ -8,17 +8,18 @@ import logging
 from django.conf import settings
 from django.contrib import messages as django_messages
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.models import User
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponseForbidden, JsonResponse, StreamingHttpResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .conversation_rag import conversational_rag_stream, conversational_rag_answer
 from .forms import ChatForm
-from .models import Conversation, Folder, Message
-from .vectorstore_db import get_db_store
+from .models import Conversation, Folder, IndexVersion, Message, SourceDocument
+from .vectorstore_db import get_db_store, invalidate_db_store_cache
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,6 @@ def folder_detail(request, folder_id):
         return JsonResponse({"error": "Not found"}, status=404)
 
     if request.method == "DELETE":
-        # Conversations become unfiled (SET_NULL via FK)
         folder.delete()
         return JsonResponse({"ok": True})
 
@@ -386,6 +386,46 @@ def folder_detail(request, folder_id):
             return JsonResponse({"error": "A folder with that name already exists"}, status=409)
 
         return JsonResponse({"id": str(folder.id), "name": folder.name})
+
+
+# ---------------------------------------------------------------------------
+# sources page (staff only)
+# ---------------------------------------------------------------------------
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def sources_view(request):
+    """
+    /sources/ — lists every IndexVersion and its SourceDocuments.
+    Staff-only. Supports activating a version via POST.
+    """
+    if not request.user.is_staff:
+        return HttpResponseForbidden("Staff access only.")
+
+    if request.method == "POST":
+        vid = request.POST.get("activate_version_id")
+        if vid:
+            try:
+                v = IndexVersion.objects.get(pk=vid, status=IndexVersion.Status.COMPLETED)
+                v.activate()
+                invalidate_db_store_cache(v.folder_id)
+                django_messages.success(
+                    request,
+                    f'Version v{v.version_number} of "{v.folder_name or v.folder_id}" activated.'
+                )
+            except IndexVersion.DoesNotExist:
+                django_messages.error(request, "Version not found or not completed.")
+        return redirect("sources")
+
+    # All completed versions, prefetch their documents for the table
+    versions = (
+        IndexVersion.objects
+        .filter(status=IndexVersion.Status.COMPLETED)
+        .prefetch_related("documents")
+        .order_by("folder_id", "-version_number")
+    )
+
+    return render(request, "chat/sources.html", {"versions": versions})
 
 
 # ---------------------------------------------------------------------------

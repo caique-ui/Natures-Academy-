@@ -27,4 +27,7 @@ urlpatterns = [
     # ── Folders ───────────────────────────────────────────────────────────
     path("api/folders/",                          views.folder_list,   name="folder_list"),
     path("api/folders/<uuid:folder_id>/",         views.folder_detail, name="folder_detail"),
+
+    # ── Sources page (staff only) ─────────────────────────────────────────
+    path("sources/", views.sources_view, name="sources"),
 ]

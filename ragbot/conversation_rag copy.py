@@ -43,6 +43,7 @@ Rules:
 - If the follow-up is already standalone (first message, or makes complete \
 sense without history), return it unchanged.
 - Output ONLY the rewritten question — no preamble, no explanation.
+- Keep it concise; do not pad with unnecessary words.
 
 Conversation history:
 {history}
@@ -56,10 +57,12 @@ You are a document assistant for Nature's Academy. \
 Answer the user's question using ONLY the retrieved document context below.
 
 Strict rules:
-1. Cite the source after every claim: (Source: filename).
-2. If the answer is not in the context, say: \
+1. Use exact wording, figures, and structure from the documents.
+2. Cite the source after every claim: (Source: filename).
+3. If the answer is not in the context, say: \
 "This information is not available in the provided documents."
-3. Do not add external knowledge or assumptions.
+4. Do not add external knowledge or assumptions.
+5. Preserve tables, lists, and procedural steps from the source.
 
 {history_block}\
 Retrieved context:

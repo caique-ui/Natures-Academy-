@@ -1,21 +1,24 @@
 """
 ragbot/tasks.py
 
-Celery tasks for automated Drive sync.
+Celery tasks for automated Drive sync and web scraping.
 
 Task graph:
   check_drive_changes_task   → runs frequently (e.g. every hour)
                                detects what changed, records it, schedules indexing
   debounced_index_task       → scheduled by check task after debounce window
-                               runs the actual ingestion if changes still pending
+                               runs the actual Drive ingestion if changes still pending
   webhook_received_task      → triggered by Drive push notification
                                records the event and schedules debounced_index_task
+  scrape_web_source_task     → runs on a schedule (e.g. daily)
+                               scrapes a URL (PDF or HTML), indexes via same pipeline
 
 All tasks are idempotent — safe to run multiple times.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Optional
 
@@ -34,8 +37,7 @@ SCOPES = [
 
 def _get_drive_service(max_retries: int = 3):
     """
-    Build an authenticated Drive service using ADC — identical to
-    gdrive_ingest._creds_with_retry() so both use the same auth path.
+    Build an authenticated Drive service using ADC.
     Works locally (gcloud auth application-default login) and on GCP
     (attached service account).
     """
@@ -69,7 +71,7 @@ def _get_drive_service(max_retries: int = 3):
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Check for changes (run frequently — no heavy work)
+# Task 1: Check for Drive changes (run frequently — no heavy work)
 # ---------------------------------------------------------------------------
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -158,13 +160,13 @@ def check_drive_changes_task(self, folder_id: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: Debounced index (the heavy work)
+# Task 2: Debounced Drive index (the heavy work)
 # ---------------------------------------------------------------------------
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
 def debounced_index_task(self, folder_id: Optional[str] = None):
     """
-    Run ingestion only if:
+    Run Drive ingestion only if:
       - debounce window has passed
       - no other worker is indexing
       - folder fingerprint actually changed
@@ -259,8 +261,16 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
                 overlap=getattr(settings, "CHUNK_OVERLAP", 150),
             )
             metadatas = [
-                {"source_id": meta["id"], "source_name": meta["name"],
-                 "mime": meta["mime"], "chunk": i, "text": c}
+                {
+                    "source_id":   meta["id"],
+                    "source_name": meta["name"],
+                    "mime":        meta["mime"],
+                    # NEW: Drive share URL and source type
+                    "source_url":  f"https://drive.google.com/file/d/{meta['id']}",
+                    "source_type": "drive",
+                    "chunk":       i,
+                    "text":        c,
+                }
                 for i, c in enumerate(chunks)
             ]
             store.add_texts(chunks, metadatas)
@@ -285,11 +295,11 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
             folder_id=fid,
             event_type=DriveSyncEvent.EventType.INDEX_DONE,
             detail={
-                "version": version.version_number,
-                "files_added": added,
+                "version":       version.version_number,
+                "files_added":   added,
                 "files_skipped": skipped,
-                "chunks": version.chunks_indexed,
-                "fingerprint": current_fingerprint,
+                "chunks":        version.chunks_indexed,
+                "fingerprint":   current_fingerprint,
             },
         )
         logger.info(f"[{fid}] ✅ Index v{version.version_number} complete. "
@@ -345,3 +355,133 @@ def webhook_received_task(folder_id: str, resource_id: str, resource_state: str)
         kwargs={"folder_id": folder_id},
         countdown=sync.debounce_seconds,
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Scrape & index a web source (scheduled daily)
+# ---------------------------------------------------------------------------
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=300)
+def scrape_web_source_task(self):
+    """
+    Scrape root_url (PDF or HTML) and index via the same versioned pipeline as Drive.
+
+    - Auto-detects PDF vs HTML via Content-Type header.
+    - Skips indexing if content fingerprint is unchanged (no re-embedding cost).
+    - Uses DB-level lock to prevent concurrent indexing of the same source.
+    - folder_id for web sources is "web:<md5(root_url)[:12]>" — stored on WebSyncState.
+
+    To trigger manually:
+        from ragbot.tasks import scrape_web_source_task
+        scrape_web_source_task.delay("https://legislation.nsw.gov.au/...")
+    """
+    from ragbot.models import WebSyncState
+    from ragbot.web_scraper import fetch_web_source, compute_web_fingerprint
+    from ragbot.vectorstore_db import DBVectorStore, invalidate_db_store_cache
+    from ragbot.textsplit import chunk_text
+    import gc
+
+    root_url: str = settings.SCRAPING_URL
+    # ── Get or create sync record ────────────────────────────────────────
+    url_hash  = hashlib.md5(root_url.encode()).hexdigest()[:12]
+    folder_id = f"web:{url_hash}"
+
+    sync, _ = WebSyncState.objects.get_or_create(
+        root_url=root_url,
+        defaults={
+            "label":     root_url,
+            "folder_id": folder_id,
+        },
+    )
+    fid = sync.folder_id  # use stored value in case it was set differently
+
+    # ── Scrape ──────────────────────────────────────────────────────────
+    logger.info(f"[{fid}] Starting web scrape: {root_url}")
+    try:
+        pages = fetch_web_source(root_url)
+    except Exception as exc:
+        logger.error(f"[{fid}] Scrape failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc)
+
+    if not pages:
+        logger.warning(f"[{fid}] No pages scraped from {root_url}")
+        WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
+        return {"status": "no_pages"}
+
+    new_fingerprint = compute_web_fingerprint(pages)
+
+    # ── Skip if nothing changed ─────────────────────────────────────────
+    if new_fingerprint == sync.content_fingerprint:
+        logger.info(f"[{fid}] Content fingerprint unchanged — skipping index.")
+        WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
+        return {"status": "skipped", "reason": "fingerprint_unchanged"}
+
+    # ── Acquire lock ─────────────────────────────────────────────────────
+    if not sync.acquire_index_lock():
+        logger.info(f"[{fid}] Another worker holds the lock — exiting.")
+        return {"status": "skipped", "reason": "lock_busy"}
+
+    # ── Index ─────────────────────────────────────────────────────────────
+    store = DBVectorStore(
+        folder_id=fid,
+        embed_model=settings.OPENAI_EMBED_MODEL,
+        chunk_max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
+        chunk_overlap=getattr(settings, "CHUNK_OVERLAP", 150),
+    )
+
+    try:
+        version = store.begin_version(folder_name=sync.label or root_url)
+        added = skipped = 0
+
+        for page in pages:
+            text = page["text"]
+            if not text.strip():
+                skipped += 1
+                continue
+
+            chunks = chunk_text(
+                text,
+                max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
+                overlap=getattr(settings, "CHUNK_OVERLAP", 150),
+            )
+            metadatas = [
+                {
+                    "source_id":   page["url"],    # URL used as the document identifier
+                    "source_name": page["title"],
+                    "mime":        "text/html",
+                    "source_url":  page["url"],    # exact URL for the source card link
+                    "source_type": "web",
+                    "chunk":       i,
+                    "text":        c,
+                }
+                for i, c in enumerate(chunks)
+            ]
+            store.add_texts(chunks, metadatas)
+            added += 1
+            gc.collect()
+
+        if not store._pending_chunks:
+            store.mark_failed("No chunks produced")
+            raise ValueError("No text extracted from any page.")
+
+        store.save(activate=True)
+        invalidate_db_store_cache(fid)
+
+        # ── Update WebSyncState ───────────────────────────────────────────
+        WebSyncState.objects.filter(pk=sync.pk).update(
+            content_fingerprint=new_fingerprint,
+            last_checked_at=timezone.now(),
+            last_indexed_at=timezone.now(),
+        )
+
+        logger.info(f"[{fid}] ✅ Web index v{version.version_number} complete. "
+                    f"{added} pages indexed, {version.chunks_indexed} chunks.")
+        return {"status": "indexed", "version": version.version_number, "pages": added}
+
+    except Exception as exc:
+        store.mark_failed(str(exc))
+        logger.error(f"[{fid}] Web indexing failed: {exc}", exc_info=True)
+        raise self.retry(exc=exc)
+
+    finally:
+        sync.release_index_lock()

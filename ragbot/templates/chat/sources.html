@@ -1,0 +1,123 @@
+{% extends "chat/base.html" %}
+{% load tz %}
+
+{% block title %}Indexed Sources — {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="sources-page">
+
+  <div class="sources-header">
+    <h1>Indexed Sources</h1>
+    <a href="{% url 'chat' %}" class="btn btn--secondary">← Back to chat</a>
+  </div>
+
+  {% if messages %}
+    {% for msg in messages %}
+      <div class="alert alert--{{ msg.tags }}">{{ msg }}</div>
+    {% endfor %}
+  {% endif %}
+
+  {% regroup versions by folder_id as folder_groups %}
+
+  {% if not versions %}
+    <div class="empty-state">
+      <p>No completed index versions yet.</p>
+      <p>Run <code>python manage.py ingest_gdrive</code> or trigger a web scrape to get started.</p>
+    </div>
+
+  {% else %}
+    {% for group in folder_groups %}
+      {% with group.list|first as first_v %}
+      <section class="source-group">
+
+        <div class="source-group__header">
+          <h2 class="source-group__title">
+            {% if first_v.folder_name %}
+              {{ first_v.folder_name }}
+            {% else %}
+              {{ group.grouper }}
+            {% endif %}
+          </h2>
+          <span class="source-group__meta">
+            folder_id: <code>{{ group.grouper }}</code>
+            &nbsp;·&nbsp; {{ group.list|length }} version{{ group.list|length|pluralize }}
+          </span>
+        </div>
+
+        {% for version in group.list %}
+        <div class="version-card {% if version.is_active %}version-card--active{% endif %}">
+
+          <div class="version-card__header">
+            <span class="version-badge">v{{ version.version_number }}</span>
+
+            {% if version.is_active %}
+              <span class="badge badge--active">● Active</span>
+            {% else %}
+              <form method="post" class="inline-form">
+                {% csrf_token %}
+                <input type="hidden" name="activate_version_id" value="{{ version.pk }}">
+                <button class="btn btn--sm" type="submit"
+                        onclick="return confirm('Activate v{{ version.version_number }}?')">
+                  Activate
+                </button>
+              </form>
+            {% endif %}
+
+            <span class="version-meta">
+              Indexed {{ version.created_at|date:"Y-m-d H:i" }}
+              {% if version.completed_at %}
+                &nbsp;·&nbsp; completed {{ version.completed_at|date:"H:i" }}
+              {% endif %}
+              &nbsp;·&nbsp; {{ version.files_processed }} source{{ version.files_processed|pluralize }}
+              &nbsp;·&nbsp; {{ version.chunks_indexed }} chunk{{ version.chunks_indexed|pluralize }}
+            </span>
+          </div>
+
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>Title / Filename</th>
+                <th>Type</th>
+                <th>Chunks</th>
+                <th>Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for doc in version.documents.all %}
+              <tr>
+                <td class="doc-name">{{ doc.drive_file_name }}</td>
+                <td>
+                  {% if doc.source_type == "web" %}
+                    <span class="badge badge--web">🌐 Web</span>
+                  {% else %}
+                    <span class="badge badge--drive">📄 Drive</span>
+                  {% endif %}
+                </td>
+                <td>{{ doc.chunk_count }}</td>
+                <td>
+                  {% if doc.source_url %}
+                    <a href="{{ doc.source_url }}" target="_blank" rel="noopener"
+                       title="{{ doc.source_url }}">↗ Open</a>
+                  {% else %}
+                    <span class="muted">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% empty %}
+              <tr>
+                <td colspan="4" class="muted">No documents recorded for this version.</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+
+        </div>
+        {% endfor %}
+
+      </section>
+      {% endwith %}
+    {% endfor %}
+  {% endif %}
+
+</div>
+{% endblock %}

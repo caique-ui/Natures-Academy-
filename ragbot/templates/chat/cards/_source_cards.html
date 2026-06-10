@@ -1,0 +1,149 @@
+{#
+  ragbot/templates/chat/_source_cards.html
+  
+  Include this partial inside your assistant message bubble, after the
+  message text. Pass `source_chunks` as the variable (a list of dicts
+  from Message.source_chunks / the RAG search results).
+
+  Usage in your message template:
+      {% if message.source_chunks %}
+        {% include "chat/_source_cards.html" with sources=message.source_chunks %}
+      {% endif %}
+
+  Or, if rendering from JavaScript (SSE stream), see the JS version at
+  the bottom of this file.
+#}
+
+{% if sources %}
+<div class="source-cards">
+  <p class="source-cards__label">Sources</p>
+  {% for src in sources %}
+    {% if src.source_url %}
+    <a class="source-card" href="{{ src.source_url }}" target="_blank" rel="noopener noreferrer">
+      {% if src.source_type == "web" %}
+        <span class="source-card__icon" aria-hidden="true">🌐</span>
+      {% else %}
+        <span class="source-card__icon" aria-hidden="true">📄</span>
+      {% endif %}
+      <span class="source-card__name">{{ src.source_name }}</span>
+      <span class="source-card__chunk">§{{ src.chunk }}</span>
+    </a>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+{#
+──────────────────────────────────────────────────────────────────────────────
+CSS — add once to your main stylesheet (or a <style> block in base.html)
+──────────────────────────────────────────────────────────────────────────────
+#}
+{% comment %}
+<style>
+.source-cards {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.source-cards__label {
+  width: 100%;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #9ca3af);
+  margin: 0 0 0.1rem;
+}
+
+.source-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  background: var(--surface-2, #f3f4f6);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: 0.76rem;
+  text-decoration: none;
+  color: var(--text, #374151);
+  max-width: 260px;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.source-card:hover {
+  background: var(--surface-3, #e9ebee);
+  border-color: var(--border-hover, #d1d5db);
+}
+
+.source-card__icon {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.source-card__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.source-card__chunk {
+  flex-shrink: 0;
+  color: var(--text-muted, #9ca3af);
+  font-size: 0.68rem;
+}
+</style>
+{% endcomment %}
+
+{#
+──────────────────────────────────────────────────────────────────────────────
+JavaScript helper — call this when you render a streamed assistant message.
+Paste into your chat JS file (e.g. chat.js).
+
+Usage:
+    const cardsHtml = buildSourceCards(sources);  // sources from SSE "done" payload
+    assistantBubble.insertAdjacentHTML('beforeend', cardsHtml);
+──────────────────────────────────────────────────────────────────────────────
+#}
+{% comment %}
+<script>
+function buildSourceCards(sources) {
+  if (!sources || !sources.length) return '';
+
+  const cards = sources
+    .filter(s => s.source_url)
+    .map(s => {
+      const icon = s.source_type === 'web' ? '🌐' : '📄';
+      const name = escHtml(s.source_name || s.source_id || '');
+      const chunk = s.chunk !== undefined ? `§${s.chunk}` : '';
+      return `
+        <a class="source-card" href="${escHtml(s.source_url)}"
+           target="_blank" rel="noopener noreferrer">
+          <span class="source-card__icon" aria-hidden="true">${icon}</span>
+          <span class="source-card__name">${name}</span>
+          <span class="source-card__chunk">${chunk}</span>
+        </a>`;
+    })
+    .join('');
+
+  if (!cards) return '';
+
+  return `
+    <div class="source-cards">
+      <p class="source-cards__label">Sources</p>
+      ${cards}
+    </div>`;
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+</script>
+{% endcomment %}

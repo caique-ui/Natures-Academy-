@@ -93,6 +93,19 @@ class SourceDocument(models.Model):
     char_count      = models.PositiveIntegerField(default=0)
     chunk_count     = models.PositiveIntegerField(default=0)
 
+    # NEW
+    SOURCE_DRIVE = "drive"
+    SOURCE_WEB   = "web"
+    SOURCE_CHOICES = [(SOURCE_DRIVE, "Google Drive"), (SOURCE_WEB, "Web")]
+
+    source_type = models.CharField(
+        max_length=10, choices=SOURCE_CHOICES, default="drive"
+    )
+    source_url = models.URLField(
+        max_length=2048, blank=True,
+        help_text="Drive share URL or scraped page URL"
+    )
+
     class Meta:
         indexes = [
             models.Index(fields=["version", "drive_file_id"]),
@@ -253,7 +266,61 @@ class DriveSyncEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} @ {self.created_at:%Y-%m-%d %H:%M}"
-    
+
+class WebSyncState(models.Model):
+    """
+    Tracks scraping state for a web source (analogous to DriveSync for Drive).
+    One row per root URL.
+    """
+    root_url = models.URLField(max_length=2048, unique=True, db_index=True)
+    label    = models.CharField(
+        max_length=255, blank=True,
+        help_text="Human-friendly name, e.g. 'NSW Regs 2011-0653'"
+    )
+    folder_id = models.CharField(
+        max_length=255,
+        help_text="Logical folder_id used in IndexVersion — e.g. 'web:nsw-regs-0653'"
+    )
+ 
+    # SHA-256 of all (url, content_hash) pairs at last successful index
+    content_fingerprint = models.CharField(max_length=64, blank=True)
+ 
+    last_checked_at     = models.DateTimeField(null=True, blank=True)
+    last_indexed_at     = models.DateTimeField(null=True, blank=True)
+    is_indexing         = models.BooleanField(default=False)
+    indexing_started_at = models.DateTimeField(null=True, blank=True)
+ 
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+ 
+    class Meta:
+        verbose_name = "Web Sync State"
+ 
+    def __str__(self):
+        return f"WebSyncState({self.root_url})"
+ 
+    def acquire_index_lock(self) -> bool:
+        from django.db import transaction
+        with transaction.atomic():
+            obj = WebSyncState.objects.select_for_update().get(pk=self.pk)
+            if obj.is_indexing and obj.indexing_started_at:
+                stale = (timezone.now() - obj.indexing_started_at).total_seconds() > 7200
+                if stale:
+                    obj.is_indexing = False
+            if obj.is_indexing:
+                return False
+            obj.is_indexing = True
+            obj.indexing_started_at = timezone.now()
+            obj.save(update_fields=["is_indexing", "indexing_started_at"])
+            self.is_indexing = True
+            return True
+ 
+    def release_index_lock(self):
+        WebSyncState.objects.filter(pk=self.pk).update(
+            is_indexing=False,
+            indexing_started_at=None,
+        )
+        self.is_indexing = False    
 
 class Folder(models.Model):
     """
