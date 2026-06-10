@@ -2,23 +2,37 @@
 """
 Conversational RAG layer.
 
-Adds two things on top of the existing single-turn RAG:
+Improvements over the original:
 
 1. Query rewriting
    A follow-up like "what about the pricing?" is rewritten into a
-   self-contained question ("What is the pricing for Nature's Academy
-   courses?") before hitting the vector store. This is the single most
-   important change for quality.
+   self-contained question before hitting the vector store.
 
-2. History-aware answering
+2. Sub-query expansion
+   The standalone query is expanded into N facets and results are merged,
+   so vague or indirect questions retrieve more relevant chunks.
+
+3. Surrounding chunk context
+   For every matched chunk, the chunk immediately before and after (in the
+   same document) is fetched and merged into the excerpt. This prevents
+   answers from being missed because the key sentence sat just outside the
+   matched chunk.
+
+4. History-aware answering
    The last N messages are passed as context so the LLM can refer back
    to earlier turns naturally.
 
-Nothing in vectorstore_db.py or models.py (existing) is modified.
+5. Rewritten system prompt
+   The LLM is instructed to answer in its own words, cite sources, and only
+   refuse when NONE of the retrieved chunks are relevant — not on every
+   partial match.
+
+Nothing in models.py is modified.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -51,26 +65,48 @@ Follow-up: {question}
 Standalone question:"""
 
 
-CHAT_PROMPT = """\
-You are a document assistant for Nature's Academy. \
-Answer the user's question using ONLY the retrieved document context below.
+SUB_QUERY_PROMPT = """\
+Given a user question, generate {n} different search queries that together \
+cover the full scope of what the user wants to know. These will be used to \
+search a policy-document database, so phrase each query the way a policy \
+document might word the same concept.
 
-Strict rules:
-1. Cite the source after every claim: (Source: filename).
-2. If the answer is not in the context, say: \
-"This information is not available in the provided documents."
-3. Do not add external knowledge or assumptions.
+Rules:
+- Each query must be 5-12 words and target a different facet of the question.
+- Include the original question's core terms in at least one query.
+- Output ONLY a valid JSON array of strings, no preamble, no code fences.
+
+User question: {question}
+JSON array:"""
+
+
+CHAT_PROMPT = """\
+You are a helpful document assistant for Nature's Academy.
+Your job is to answer questions using the retrieved document excerpts below.
+
+Guidelines:
+1. Base your answer on the retrieved excerpts. Write in your own words — \
+do not copy text verbatim from the documents.
+2. After each factual claim, cite the source in parentheses: \
+(Source: <filename>). If multiple excerpts support a claim, list all sources.
+3. If the retrieved excerpts contain relevant information but do not fully \
+answer the question, answer as much as you can from the excerpts and clearly \
+note what aspect is not covered.
+4. Only say "This topic does not appear in the available documents." when \
+NONE of the retrieved excerpts are relevant to the question at all.
+5. If the question uses different wording than the documents, use your \
+judgment to recognise when the excerpts address the same topic.
 
 {history_block}\
-Retrieved context:
+Retrieved document excerpts:
 {context}
 
-User: {question}
-Assistant:"""
+User question: {question}
+Answer:"""
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Query rewriting
 # ---------------------------------------------------------------------------
 
 def rewrite_query(question: str, history: list[dict]) -> str:
@@ -102,33 +138,164 @@ def rewrite_query(question: str, history: list[dict]) -> str:
         return question
 
 
-def build_context(retrieved: list[tuple], snippet_size: int = 2000) -> str:
+# ---------------------------------------------------------------------------
+# Sub-query expansion
+# ---------------------------------------------------------------------------
+
+def expand_to_sub_queries(question: str, n: int = 3) -> list[str]:
     """
-    Build the context block from vectorstore search results.
-    Identical logic to views.py build_context() so both paths stay in sync.
+    Generate up to n additional search queries that cover different facets of
+    the question.  The original question is always included as the first item.
+
+    Falls back gracefully to [question] on any error.
     """
-    blocks = []
-    seen   = set()
+    try:
+        client = OpenAI()
+        resp = client.chat.completions.create(
+            model=settings.OPENAI_CHAT_MODEL,
+            messages=[{"role": "user", "content": SUB_QUERY_PROMPT.format(
+                question=question, n=n,
+            )}],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        raw = resp.choices[0].message.content.strip()
+        # Strip accidental code-fence wrapping
+        raw = raw.strip("`").strip()
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
+        sub_queries: list[str] = json.loads(raw)
+        # Always keep the original as the anchor query
+        all_queries = [question] + [q for q in sub_queries if q != question]
+        logger.debug("Sub-queries for %r: %s", question, all_queries)
+        return all_queries
+    except Exception as exc:
+        logger.warning("Sub-query expansion failed (%s); using original query.", exc)
+        return [question]
+
+
+# ---------------------------------------------------------------------------
+# Context building (with surrounding chunk fetch)
+# ---------------------------------------------------------------------------
+
+def build_context(
+    retrieved: list[tuple],
+    store,
+    snippet_size: int = 2000,
+    surround: int = 1,
+) -> str:
+    """
+    Build the context block from vector-store search results.
+
+    For each matched chunk, fetches `surround` neighbours on each side from
+    the same source document and merges them into a single excerpt.  This
+    ensures the LLM has the sentence(s) immediately before and after the
+    matched passage, which is the most common reason for missed answers.
+
+    Parameters
+    ----------
+    retrieved   : list of (score, meta) tuples from store.search()
+    store       : DBVectorStore instance (for fetch_surrounding_chunks)
+    snippet_size: max characters per merged excerpt before trimming
+    surround    : how many neighbour chunks to fetch on each side (default 1)
+    """
+    blocks: list[str] = []
+    seen_chunk_pks: set[int] = set()
+
     for score, meta in retrieved:
-        key = f"{meta.get('source_name')}_{meta.get('chunk')}"
-        if key in seen:
+        anchor_pk = meta.get("chunk_pk")
+        if anchor_pk is None:
             continue
-        seen.add(key)
-        text = meta.get("text", "")
-        if len(text) > snippet_size:
-            # Trim at sentence boundary
-            cut = text[:snippet_size]
+
+        # Fetch anchor + neighbours
+        window = store.fetch_surrounding_chunks(anchor_pk, window=surround)
+        if not window:
+            continue
+
+        # Collect only chunks we haven't already included from a prior result
+        new_chunks = [wc for wc in window if wc["chunk_pk"] not in seen_chunk_pks]
+        if not new_chunks:
+            continue
+
+        for wc in new_chunks:
+            seen_chunk_pks.add(wc["chunk_pk"])
+
+        # Merge the texts in sequence order (fetch_surrounding_chunks returns
+        # them ordered by chunk_index)
+        merged_text = "\n".join(wc["text"] for wc in new_chunks)
+
+        if len(merged_text) > snippet_size:
+            cut = merged_text[:snippet_size]
             last = max(cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
-            text = cut[: last + 1] if last > snippet_size * 0.7 else cut + "..."
+            merged_text = cut[:last + 1] if last > snippet_size * 0.7 else cut + "..."
+
+        first_idx = new_chunks[0]["chunk_index"]
+        last_idx  = new_chunks[-1]["chunk_index"]
+        chunk_range = (
+            f"Chunk {first_idx}" if first_idx == last_idx
+            else f"Chunks {first_idx}–{last_idx}"
+        )
+
+        source_url  = meta.get("source_url", "")
+        source_ref  = (
+            f"{meta.get('source_name', 'Unknown')} ({source_url})"
+            if source_url else
+            meta.get("source_name", "Unknown")
+        )
+
         blocks.append(
             f"=== DOCUMENT EXCERPT ===\n"
-            f"Source: {meta.get('source_name', 'Unknown')} "
-            f"(Chunk {meta.get('chunk', 0)}, score {score:.3f})\n"
-            f"Content:\n{text}\n"
+            f"Source: {source_ref} | {chunk_range} | match score {score:.3f}\n"
+            f"Content:\n{merged_text}\n"
             f"=== END EXCERPT ==="
         )
+
     return "\n\n".join(blocks) if blocks else "No relevant context found."
 
+
+# ---------------------------------------------------------------------------
+# Multi-query retrieval
+# ---------------------------------------------------------------------------
+
+def multi_query_retrieve(
+    standalone_query: str,
+    store,
+    k_per_query: int = 6,
+    max_total: int = 12,
+    n_sub_queries: int = 3,
+) -> list[tuple]:
+    """
+    Run the standalone query plus sub-queries against the vector store and
+    return a deduplicated, score-sorted list of (score, meta) tuples.
+
+    Parameters
+    ----------
+    standalone_query : already-rewritten question
+    store            : DBVectorStore instance
+    k_per_query      : chunks retrieved per query (default 6)
+    max_total        : maximum chunks to pass to the LLM (default 12)
+    n_sub_queries    : number of sub-queries to generate (default 3)
+    """
+    all_queries = expand_to_sub_queries(standalone_query, n=n_sub_queries)
+
+    seen_pks: set[int] = set()
+    merged: list[tuple] = []
+
+    for q in all_queries:
+        for score, meta in store.search(q, k=k_per_query):
+            pk = meta.get("chunk_pk")
+            if pk not in seen_pks:
+                seen_pks.add(pk)
+                merged.append((score, meta))
+
+    # Sort descending by score, keep top max_total
+    merged.sort(key=lambda x: x[0], reverse=True)
+    return merged[:max_total]
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def conversational_rag_answer(question: str, conversation: "Conversation") -> dict:
     """
@@ -136,15 +303,16 @@ def conversational_rag_answer(question: str, conversation: "Conversation") -> di
 
     1. Load recent history from the Conversation.
     2. Rewrite the question into a standalone retrieval query.
-    3. Retrieve chunks from the vector store.
-    4. Build prompt with history + context.
-    5. Stream or return full answer.
+    3. Expand into sub-queries and retrieve chunks from the vector store.
+    4. Fetch surrounding chunks for each match.
+    5. Build prompt with history + context.
+    6. Return full answer.
 
     Returns:
         {
-            "answer":   str,
-            "sources":  [{"source_name": str, "chunk_pk": int, "score": float}],
-            "rewritten_query": str,   # useful for debugging
+            "answer":          str,
+            "sources":         [{"source_name": str, "chunk_pk": int, "score": float}],
+            "rewritten_query": str,
         }
     """
     from ragbot.vectorstore_db import get_db_store
@@ -154,14 +322,14 @@ def conversational_rag_answer(question: str, conversation: "Conversation") -> di
     # Step 1 — rewrite
     standalone_query = rewrite_query(question, history)
 
-    # Step 2 — retrieve
+    # Step 2 — retrieve (multi-query)
     store     = get_db_store()
-    retrieved = store.search(standalone_query, k=8)
+    retrieved = multi_query_retrieve(standalone_query, store)
 
-    # Step 3 — build context
-    context_text = build_context(retrieved, snippet_size=2000)
+    # Step 3 — build context with surrounding chunks
+    context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
 
-    # Step 4 — build history block for the answer prompt
+    # Step 4 — build history block
     if history:
         history_lines = "\n".join(
             f"{m['role'].capitalize()}: {m['content']}" for m in history
@@ -189,6 +357,7 @@ def conversational_rag_answer(question: str, conversation: "Conversation") -> di
     sources = [
         {
             "source_name": meta.get("source_name", "Unknown"),
+            "source_url":  meta.get("source_url", ""),
             "chunk_pk":    meta.get("chunk_pk"),
             "score":       round(score, 3),
         }
@@ -204,8 +373,8 @@ def conversational_rag_answer(question: str, conversation: "Conversation") -> di
 
 def conversational_rag_stream(question: str, conversation: "Conversation"):
     """
-    Same as conversational_rag_answer() but yields SSE-formatted strings
-    for use in a StreamingHttpResponse.
+    Same pipeline as conversational_rag_answer() but yields SSE-formatted
+    strings for use in a StreamingHttpResponse.
 
     Yields strings ready to write directly (caller adds 'data: ' prefix).
     Use like:
@@ -213,7 +382,6 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         for chunk in conversational_rag_stream(q, conv):
             yield chunk
     """
-    import json
     from ragbot.vectorstore_db import get_db_store
 
     def _event(payload: dict) -> str:
@@ -225,10 +393,14 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
 
         yield _event({"type": "status", "message": "Rewriting query..."})
         standalone_query = rewrite_query(question, history)
+
         yield _event({"type": "status", "message": "Searching documents..."})
         store     = get_db_store()
-        retrieved = store.search(standalone_query, k=8)
-        context_text = build_context(retrieved, snippet_size=2000)
+        retrieved = multi_query_retrieve(standalone_query, store)
+
+        yield _event({"type": "status", "message": "Building context..."})
+        context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
+
         if history:
             history_lines = "\n".join(
                 f"{m['role'].capitalize()}: {m['content']}" for m in history
@@ -265,6 +437,7 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         sources = [
             {
                 "source_name": meta.get("source_name", "Unknown"),
+                "source_url":  meta.get("source_url", ""),
                 "chunk_pk":    meta.get("chunk_pk"),
                 "score":       round(score, 3),
             }

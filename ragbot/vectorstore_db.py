@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import re
 import threading
 import time
 from typing import Dict, List, Optional, Tuple
@@ -38,6 +39,45 @@ def _bytes_to_vec(b: bytes, dim: int) -> np.ndarray:
     return np.frombuffer(b, dtype="float32").copy()
 
 
+def clean_chunk_for_embedding(text: str) -> str:
+    """
+    Return a cleaner version of a chunk suitable for embedding.
+
+    Markdown pipe-tables embed poorly because the tokeniser treats '|' as
+    noise.  This converts them to prose so the embedding captures the actual
+    content.  The original (formatted) text is kept in DocumentChunk.text for
+    display; only the cleaned version is sent to the embedding API.
+
+    Transformations applied:
+    - Separator rows  (| --- | --- |)  are dropped entirely.
+    - Data rows  (| cell | cell |)  become  "cell. cell"  sentences.
+    - Multiple blank lines are collapsed to one.
+    - Leading/trailing whitespace is stripped.
+    """
+    lines = text.splitlines()
+    cleaned: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Drop markdown table separator rows: | :--- | ---: |
+        if re.match(r"^\|[-| :]+\|$", stripped):
+            continue
+
+        # Convert table data rows to prose
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|") if c.strip()]
+            if cells:
+                cleaned.append(". ".join(cells))
+            continue
+
+        cleaned.append(line)
+
+    # Collapse multiple blank lines
+    result = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned))
+    return result.strip()
+
+
 # ---------------------------------------------------------------------------
 # main class
 # ---------------------------------------------------------------------------
@@ -54,6 +94,11 @@ class DBVectorStore:
 
     results = store.search("my query")  # at query time
     """
+
+    # Minimum cosine similarity score to include a result.
+    # Chunks below this threshold are likely off-topic and should be excluded
+    # from the context sent to the LLM.
+    MIN_SCORE: float = 0.45
 
     def __init__(
         self,
@@ -115,6 +160,10 @@ class DBVectorStore:
 
         metadatas must contain: source_id, source_name, mime, chunk, text.
         Optional keys: source_url, source_type (defaults: "", "drive").
+
+        The raw texts are cleaned before embedding (markdown tables → prose)
+        but the original text is stored in DocumentChunk.text so the LLM
+        sees properly formatted content.
         """
         if not texts:
             return
@@ -122,18 +171,21 @@ class DBVectorStore:
             raise RuntimeError("Call begin_version() before add_texts()")
 
         print(f"Embedding {len(texts)} chunks...")
-        vectors = self.embed(texts)
+
+        # Clean for embedding only; originals are stored for display
+        texts_for_embedding = [clean_chunk_for_embedding(t) for t in texts]
+        vectors = self.embed(texts_for_embedding)
 
         for text, meta, vec in zip(texts, metadatas, vectors):
             self._pending_chunks.append({
                 "drive_file_id":   meta["source_id"],
                 "drive_file_name": meta["source_name"],
                 "mime_type":       meta["mime"],
-                "source_url":      meta.get("source_url", ""),       # NEW
-                "source_type":     meta.get("source_type", "drive"),  # NEW
+                "source_url":      meta.get("source_url", ""),
+                "source_type":     meta.get("source_type", "drive"),
                 "chunk_index":     meta["chunk"],
-                "text":            text,
-                "embedding":       vec,
+                "text":            text,          # original preserved for LLM
+                "embedding":       vec,           # from cleaned text
             })
 
     def save(self, activate: bool = True):
@@ -162,8 +214,8 @@ class DBVectorStore:
                         drive_file_id=fid,
                         drive_file_name=c["drive_file_name"],
                         mime_type=c["mime_type"],
-                        source_url=c.get("source_url", ""),       # NEW
-                        source_type=c.get("source_type", "drive"), # NEW
+                        source_url=c.get("source_url", ""),
+                        source_type=c.get("source_type", "drive"),
                     )
                     docs_map[fid] = doc
                     doc_chunk_counts[fid] = 0
@@ -274,14 +326,22 @@ class DBVectorStore:
         version_id).
 
         Returns list of (score, metadata_dict) sorted descending by score.
+        Results below MIN_SCORE are filtered out.
         metadata_dict includes source_url and source_type.
         """
         t0 = time.time()
 
         if _use_pgvector():
-            return self._search_pgvector(query, k, version_id)
+            results = self._search_pgvector(query, k, version_id)
         else:
-            return self._search_faiss(query, k, version_id)
+            results = self._search_faiss(query, k, version_id)
+
+        # Filter out low-confidence results
+        results = [(score, meta) for score, meta in results if score >= self.MIN_SCORE]
+
+        elapsed = time.time() - t0
+        print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
+        return results
 
     def _get_target_version(self, version_id: Optional[int]) -> Optional[IndexVersion]:
         if version_id is not None:
@@ -289,7 +349,7 @@ class DBVectorStore:
         return IndexVersion.objects.filter(
             folder_id=self.folder_id, is_active=True
         ).first()
-    
+
     def _get_target_version_web(self) -> Optional[IndexVersion]:
         return IndexVersion.objects.filter(
             folder_name=settings.SCRAPING_URL, is_active=True
@@ -302,16 +362,24 @@ class DBVectorStore:
         version_id: Optional[int],
     ) -> List[Tuple[float, Dict]]:
         """Load embeddings into a local FAISS index, then search."""
-        version = self._get_target_version(version_id)
+        version     = self._get_target_version(version_id)
         version_web = self._get_target_version_web()
+
         if version is None and version_web is None:
             print("No active version found.")
             return []
 
+        # Canonical version for cache-key purposes: prefer the Drive version,
+        # fall back to web-only.
+        canonical_version = version if version is not None else version_web
+
         with self._lock:
-            # Rebuild FAISS index if the active version changed
-            if self._faiss_loaded_version_id != version.pk:
-                self._build_faiss_index([version, version_web][version_web is not None])
+            # FIX: previously used boolean indexing ([v, vw][vw is not None])
+            # which silently loaded only the web version when both were present.
+            # Now we always build a list of all non-None versions.
+            if self._faiss_loaded_version_id != canonical_version.pk:
+                versions_to_load = [v for v in [version, version_web] if v is not None]
+                self._build_faiss_index(versions_to_load)
 
             if self._faiss_index is None or self._faiss_index.ntotal == 0:
                 return []
@@ -331,36 +399,41 @@ class DBVectorStore:
                     "source_id":   chunk.document.drive_file_id,
                     "source_name": chunk.document.drive_file_name,
                     "mime":        chunk.document.mime_type,
-                    "source_url":  chunk.document.source_url,   # NEW
-                    "source_type": chunk.document.source_type,  # NEW
+                    "source_url":  chunk.document.source_url,
+                    "source_type": chunk.document.source_type,
                     "chunk":       chunk.chunk_index,
                     "text":        chunk.text,
-                    "version":     version.version_number,
+                    "version":     canonical_version.version_number,
                 }))
             except DocumentChunk.DoesNotExist:
                 pass
 
         return results
 
-    def _build_faiss_index(self, version: List[IndexVersion]|IndexVersion):
-        """(Re-)build the in-memory FAISS index from DB rows for a version."""
-        print(f"Loading embeddings for version v{version.version_number} into FAISS…")
-        if isinstance(version, list):
-            chunks = list(
-                DocumentChunk.objects.filter(version__in=version)
-                .order_by("pk")
-                .only("pk", "embedding")
-            )
-        else:
-            chunks = list(
-                DocumentChunk.objects.filter(version=version)
-                .order_by("pk")
-                .only("pk", "embedding")
-            )
+    def _build_faiss_index(self, versions: List[IndexVersion]):
+        """
+        (Re-)build the in-memory FAISS index from DB rows for one or more
+        versions.  Accepts a list so Drive + Web chunks can be merged into a
+        single index.
+        """
+        version_pks = [v.pk for v in versions]
+        version_nums = [v.version_number for v in versions]
+        print(f"Loading embeddings for versions {version_nums} into FAISS…")
+
+        chunks = list(
+            DocumentChunk.objects
+            .filter(version__pk__in=version_pks)
+            .order_by("pk")
+            .only("pk", "embedding")
+        )
+
+        # Use the first version's pk as the cache key (Drive version comes first)
+        canonical_pk = versions[0].pk
+
         if not chunks:
             self._faiss_index = faiss.IndexFlatIP(self.dim)
             self._faiss_chunk_ids = []
-            self._faiss_loaded_version_id = version.pk
+            self._faiss_loaded_version_id = canonical_pk
             return
 
         vectors = np.vstack([
@@ -372,8 +445,8 @@ class DBVectorStore:
 
         self._faiss_index = index
         self._faiss_chunk_ids = [c.pk for c in chunks]
-        self._faiss_loaded_version_id = version.pk
-        print(f"FAISS index ready: {index.ntotal} vectors")
+        self._faiss_loaded_version_id = canonical_pk
+        print(f"FAISS index ready: {index.ntotal} vectors across {len(versions)} version(s)")
         del vectors
         gc.collect()
 
@@ -390,22 +463,25 @@ class DBVectorStore:
         """
         from pgvector.django import CosineDistance  # type: ignore
 
-        version = self._get_target_version(version_id)
+        version     = self._get_target_version(version_id)
         version_web = self._get_target_version_web()
+
         if version is None and version_web is None:
             return []
 
+        active_versions = [v for v in [version, version_web] if v is not None]
         qv = self.embed([query])[0].tolist()
 
         qs = (
             DocumentChunk.objects
-            .filter(version__in=[version, version_web] if version_web else [version])
+            .filter(version__in=active_versions)
             .select_related("document")
             .annotate(distance=CosineDistance("embedding", qv))
             .order_by("distance")[:k]
         )
 
         results = []
+        canonical_version = version if version is not None else version_web
         for chunk in qs:
             score = 1.0 - float(chunk.distance)  # cosine similarity
             results.append((score, {
@@ -413,13 +489,64 @@ class DBVectorStore:
                 "source_id":   chunk.document.drive_file_id,
                 "source_name": chunk.document.drive_file_name,
                 "mime":        chunk.document.mime_type,
-                "source_url":  chunk.document.source_url,   # NEW
-                "source_type": chunk.document.source_type,  # NEW
+                "source_url":  chunk.document.source_url,
+                "source_type": chunk.document.source_type,
                 "chunk":       chunk.chunk_index,
                 "text":        chunk.text,
-                "version":     version.version_number,
+                "version":     canonical_version.version_number,
             }))
         return results
+
+    # ------------------------------------------------------------------
+    # surrounding chunk fetch
+    # ------------------------------------------------------------------
+
+    def fetch_surrounding_chunks(
+        self,
+        chunk_pk: int,
+        window: int = 1,
+    ) -> List[Dict]:
+        """
+        Return the chunk identified by chunk_pk plus `window` neighbours on
+        each side from the same source document, in sequential order.
+
+        This gives the LLM the context immediately before and after the
+        matched passage without retrieving the full document.
+
+        Returns a list of dicts with keys:
+            chunk_pk, source_name, source_url, chunk_index, text, is_anchor
+        """
+        try:
+            anchor = DocumentChunk.objects.select_related("document").get(pk=chunk_pk)
+        except DocumentChunk.DoesNotExist:
+            return []
+
+        lo = max(0, anchor.chunk_index - window)
+        hi = anchor.chunk_index + window
+
+        neighbours = (
+            DocumentChunk.objects
+            .filter(
+                document=anchor.document,
+                chunk_index__gte=lo,
+                chunk_index__lte=hi,
+            )
+            .select_related("document")
+            .order_by("chunk_index")
+        )
+
+        return [
+            {
+                "chunk_pk":    c.pk,
+                "source_name": c.document.drive_file_name,
+                "source_url":  c.document.source_url,
+                "source_type": c.document.source_type,
+                "chunk_index": c.chunk_index,
+                "text":        c.text,
+                "is_anchor":   c.pk == chunk_pk,
+            }
+            for c in neighbours
+        ]
 
     # ------------------------------------------------------------------
     # stats / utils
