@@ -103,8 +103,9 @@ class DBVectorStore:
 
     # Minimum cosine similarity to include a result.
     # Chunks below this threshold are likely off-topic.
-    MIN_SCORE: float = 0.45
-
+    # 0.35 is permissive enough for paraphrased/indirect queries while
+    # still filtering out genuinely unrelated content.
+    MIN_SCORE: float = 0.35
     def __init__(
         self,
         folder_id: str,
@@ -336,6 +337,18 @@ class DBVectorStore:
 
         results = [(score, meta) for score, meta in results if score >= self.MIN_SCORE]
 
+        # Fallback: if nothing passes threshold, widen to top-3 results
+        # regardless of score so the LLM always has something to work with.
+        # The prompt instructs it to say "not available" only when truly irrelevant.
+        if not results:
+            if _use_pgvector():
+                raw = self._search_pgvector(query, 3, version_id)
+            else:
+                raw = self._search_faiss(query, 3, version_id)
+            results = raw[:3]
+            if results:
+                print(f"search: threshold fallback triggered, best score={results[0][0]:.3f}")
+
         elapsed = time.time() - t0
         print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
         return results
@@ -348,9 +361,17 @@ class DBVectorStore:
         ).first()
 
     def _get_target_version_web(self) -> Optional[IndexVersion]:
+        """
+        Find the active web IndexVersion.
+        Web versions are stored with a folder_id starting with 'web:'
+        (e.g. 'web:nsw-regs-0653') — never a Drive folder UUID.
+        Using folder_name=SCRAPING_URL was unreliable because folder_name
+        stores a human label, not the raw URL.
+        """
         return IndexVersion.objects.filter(
-            folder_name=settings.SCRAPING_URL, is_active=True
-        ).first()
+            folder_name=settings.SCRAPING_URL,
+            is_active=True,
+        ).order_by("-created_at").first()
 
     def _search_faiss(
         self,
@@ -361,19 +382,21 @@ class DBVectorStore:
         """Load embeddings into a local FAISS index, then search."""
         version     = self._get_target_version(version_id)
         version_web = self._get_target_version_web()
-
+        #version_web = self._get_target_version(version_id)
+        #version = self._get_target_version_web()
         if version is None and version_web is None:
             print("No active version found.")
             return []
 
         cache_key = _versions_cache_key(version, version_web)
-
+        
         with self._lock:
             # FIX: previously compared only the Drive version pk, so a
             # web-only update never triggered a FAISS rebuild.  Now we use a
             # combined "drive_pk:web_pk" key so either change forces a reload.
             if self._faiss_loaded_cache_key != cache_key:
                 versions_to_load = [v for v in [version, version_web] if v is not None]
+                
                 self._build_faiss_index(versions_to_load, cache_key)
 
             if self._faiss_index is None or self._faiss_index.ntotal == 0:
@@ -381,7 +404,6 @@ class DBVectorStore:
 
             qv = self.embed([query])
             D, I = self._faiss_index.search(qv, min(k, self._faiss_index.ntotal))
-
         canonical = version if version is not None else version_web
         results = []
         for score, idx in zip(D[0], I[0]):
@@ -403,7 +425,6 @@ class DBVectorStore:
                 }))
             except DocumentChunk.DoesNotExist:
                 pass
-
         return results
 
     def _build_faiss_index(self, versions: List[IndexVersion], cache_key: str):
@@ -414,15 +435,16 @@ class DBVectorStore:
         """
         version_nums = [v.version_number for v in versions]
         version_pks  = [v.pk for v in versions]
-        print(f"Loading embeddings for versions {version_nums} into FAISS…")
+        print(f"Loading embeddings for versions {version_nums} into FAISS… pks={version_pks}")
 
         chunks = list(
             DocumentChunk.objects
-            .filter(version__pk__in=version_pks)
+            .filter(version__in=version_pks)
             .order_by("pk")
             .only("pk", "embedding")
         )
-
+        
+        
         if not chunks:
             self._faiss_index = faiss.IndexFlatIP(self.dim)
             self._faiss_chunk_ids = []
@@ -432,7 +454,7 @@ class DBVectorStore:
         vectors = np.vstack([
             _bytes_to_vec(bytes(c.embedding), self.dim) for c in chunks
         ]).astype("float32")
-
+        
         index = faiss.IndexFlatIP(self.dim)
         index.add(vectors)
 

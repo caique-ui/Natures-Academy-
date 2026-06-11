@@ -25,7 +25,7 @@ MIME_EXPORTS = {
     "application/vnd.google-apps.presentation": ("text/plain", "txt"),
     "application/vnd.google-apps.spreadsheet": ("text/plain", "txt"),
 }
-
+FOLDER_MIME = "application/vnd.google-apps.folder"
 TEXT_MIMES = {
     "text/plain",
     "text/markdown",
@@ -246,49 +246,58 @@ def _creds_with_retry(max_retries=3):
                     raise
 
 
-def iter_drive_files(folder_id: str) -> Iterable[dict]:
-    """Iterate through all files in a Google Drive folder with retry logic."""
-    try:
-        credentials = _creds_with_retry()
-        service = build("drive", "v3", credentials=credentials)
-        
-        # Test folder access first
-        try:
-            folder_info = service.files().get(fileId=folder_id, fields="id,name").execute()
-            print(f"✅ Successfully accessed folder: {folder_info.get('name', 'Unknown')}")
-        except Exception as e:
-            if "notFound" in str(e):
-                raise Exception(f"Folder not found or not accessible. Make sure folder ID '{folder_id}' is correct and shared with your service account.")
-            else:
-                raise Exception(f"Error accessing folder: {e}")
-        
-        q = f"'{folder_id}' in parents and trashed = false"
-        fields = "nextPageToken, files(id, name, mimeType)"
+def iter_drive_files(folder_id: str):
+    """
+    Recursively iterate all files in a Google Drive folder,
+    including files inside nested folders.
+    """
+
+    credentials = _creds_with_retry()
+    service = build("drive", "v3", credentials=credentials)
+
+    visited_folders = set()
+
+    def walk(current_folder_id):
+        if current_folder_id in visited_folders:
+            return
+
+        visited_folders.add(current_folder_id)
+
         page_token = None
-        file_count = 0
-        
+
         while True:
-            try:
-                resp = service.files().list(q=q, fields=fields, pageToken=page_token).execute()
-                files = resp.get("files", [])
-                
-                for f in files:
-                    file_count += 1
-                    yield f
-                    
-                page_token = resp.get("nextPageToken")
-                if not page_token:
-                    break
-                    
-            except Exception as e:
-                print(f"Error listing files: {e}")
-                raise
-                
-        print(f"✅ Found {file_count} files in folder")
-        
-    except Exception as e:
-        print(f"❌ Error in iter_drive_files: {e}")
-        raise
+            resp = service.files().list(
+                q=f"'{current_folder_id}' in parents and trashed=false",
+                fields="nextPageToken, files(id,name,mimeType)",
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ).execute()
+
+            for item in resp.get("files", []):
+
+                # Recurse into subfolders
+                if item["mimeType"] == FOLDER_MIME:
+                    print(f"📁 Entering folder: {item['name']}")
+                    yield from walk(item["id"])
+                else:
+                    yield item
+
+            page_token = resp.get("nextPageToken")
+
+            if not page_token:
+                break
+
+    # Verify root folder access
+    folder_info = service.files().get(
+        fileId=folder_id,
+        fields="id,name",
+        supportsAllDrives=True,
+    ).execute()
+
+    print(f"✅ Successfully accessed folder: {folder_info['name']}")
+
+    yield from walk(folder_id)
 
 
 def fetch_text_for_file(file: dict) -> Tuple[str, dict]:

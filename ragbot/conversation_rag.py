@@ -34,13 +34,20 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CONDENSE_PROMPT = """\
-Given the conversation history and a follow-up message from the user, \
-rewrite the follow-up as a fully self-contained question that includes \
-all necessary context from the history.
+You are helping rewrite a follow-up message from a user into a standalone \
+search query for a document database.
 
 Rules:
-- If the follow-up is already standalone (first message, or makes complete \
-sense without history), return it unchanged.
+- If the follow-up is a QUESTION or TOPIC REQUEST about document content \
+(e.g. "what about fees?", "how do I enrol?", "terminate a child's enrolment"), \
+rewrite it as a clear standalone question using context from the history.
+- If the follow-up is a CONVERSATIONAL INSTRUCTION that refers to the \
+assistant's previous answer (e.g. "share it as it is", "show me more detail", \
+"can you expand on that", "give me the full text", "repeat that"), extract the \
+TOPIC of the previous assistant answer and rewrite as: \
+"Show full details about <topic>" — so the document search retrieves \
+all relevant chunks on that topic.
+- If the follow-up is a greeting, thank you, or unrelated chat, return it unchanged.
 - Output ONLY the rewritten question — no preamble, no explanation.
 
 Conversation history:
@@ -66,21 +73,26 @@ JSON array:"""
 
 
 CHAT_PROMPT = """\
-You are a helpful document assistant for Nature's Academy.
+You are a knowledgeable and helpful assistant for Nature's Academy.
 Your job is to answer questions using the retrieved document excerpts below.
 
 Guidelines:
-1. Base your answer on the retrieved excerpts. Write in your own words — \
-do not copy text verbatim from the documents.
-2. After each factual claim, cite the source in parentheses: \
-(Source: <filename>). If multiple excerpts support a claim, list all sources.
-3. If the retrieved excerpts contain relevant information but do not fully \
-answer the question, answer as much as you can from the excerpts and clearly \
-note what aspect is not covered.
-4. Only say "This topic does not appear in the available documents." when \
-NONE of the retrieved excerpts are relevant to the question at all.
-5. If the question uses different wording than the documents, use your \
-judgment to recognise when the excerpts address the same topic.
+1. Answer in clear, natural language using your own words — you do not need \
+to copy text verbatim, but stay faithful to what the documents say.
+2. Cite sources inline after each point: (Source: <filename>). \
+If a source URL is available, format as (Source: <filename> — <url>).
+3. If the excerpts partially answer the question, answer what you can \
+and briefly note what aspect is not covered — do NOT refuse entirely.
+4. If the user asks to "share as it is", "show the original text", or \
+"give the full document content", reproduce the relevant excerpt text \
+as closely as possible with the source citation.
+5. Only say "This topic does not appear in the available documents." \
+when NONE of the retrieved excerpts are even remotely relevant.
+6. Use your judgment to match different phrasings — e.g. \
+"end an enrolment", "terminate enrolment", and "withdraw a child" \
+all refer to the same policy concept.
+7. If the question is vague or incomplete (e.g. just a topic keyword), \
+infer what the user most likely wants to know and answer that.
 
 {history_block}\
 Retrieved document excerpts:
@@ -299,7 +311,7 @@ def conversational_rag_answer(question: str, conversation: "Conversation") -> di
 
     store     = get_db_store()
     retrieved = multi_query_retrieve(standalone_query, store)
-
+    
     context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
 
     if history:
@@ -366,10 +378,9 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         yield _event({"type": "status", "message": "Searching documents..."})
         store     = get_db_store()
         retrieved = multi_query_retrieve(standalone_query, store)
-
+        
         yield _event({"type": "status", "message": "Building context..."})
         context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
-
         if history:
             history_lines = "\n".join(
                 f"{m['role'].capitalize()}: {m['content']}" for m in history
