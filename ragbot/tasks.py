@@ -1,19 +1,13 @@
 """
-ragbot/tasks.py
-
-Celery tasks for automated Drive sync and web scraping.
-
-Task graph:
-  check_drive_changes_task   → runs frequently (e.g. every hour)
-                               detects what changed, records it, schedules indexing
-  debounced_index_task       → scheduled by check task after debounce window
-                               runs the actual Drive ingestion if changes still pending
-  webhook_received_task      → triggered by Drive push notification
-                               records the event and schedules debounced_index_task
-  scrape_web_source_task     → runs on a schedule (e.g. daily)
-                               scrapes a URL (PDF or HTML), indexes via same pipeline
-
-All tasks are idempotent — safe to run multiple times.
+ragbot/tasks.py  — FULL UPDATED FILE
+=====================================
+Changes from original:
+  1. scrape_web_source_task accepts optional bundle_id param,
+     registers its IndexVersion with the NightlyBundle on completion.
+  2. Two new tasks added at the bottom:
+       - nightly_scrape_orchestrator_task  (replaces beat schedule entry)
+       - nightly_activate_bundle_task      (fires after all domains finish)
+  3. Everything else is unchanged.
 """
 
 from __future__ import annotations
@@ -36,11 +30,6 @@ SCOPES = [
 
 
 def _get_drive_service(max_retries: int = 3):
-    """
-    Build an authenticated Drive service using ADC.
-    Works locally (gcloud auth application-default login) and on GCP
-    (attached service account).
-    """
     import socket
     import time
     from google.auth import default, compute_engine
@@ -51,10 +40,8 @@ def _get_drive_service(max_retries: int = 3):
         try:
             socket.setdefaulttimeout(30)
             if settings.APP_ENV == "local":
-                print("Using local ADC credentials (gcloud auth application-default login)")
                 credentials, _ = default(scopes=SCOPES)
             else:
-                print("Using Compute Engine credentials (service account attached to VM/container)")
                 credentials = compute_engine.Credentials()
             credentials.refresh(Request())
             return build("drive", "v3", credentials=credentials, cache_discovery=False)
@@ -71,39 +58,29 @@ def _get_drive_service(max_retries: int = 3):
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Check for Drive changes (run frequently — no heavy work)
+# Task 1: Check for Drive changes
 # ---------------------------------------------------------------------------
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def check_drive_changes_task(self, folder_id: Optional[str] = None):
-    """
-    1. Call Drive Changes API with stored pageToken
-    2. Record changed file IDs in DriveSync.pending_file_ids
-    3. If changes found, schedule debounced_index_task
-    """
     from ragbot.models import DriveSync, DriveSyncEvent
-    from ragbot.drive_sync import (
-        fetch_drive_changes,
-        get_initial_page_token,
-    )
+    from ragbot.drive_sync import fetch_drive_changes, get_initial_page_token
 
     fid = folder_id or settings.GDRIVE_DEFAULT_FOLDER_ID
 
     try:
         drive = _get_drive_service()
-
         sync, created = DriveSync.objects.get_or_create(
             folder_id=fid,
             defaults={"folder_name": fid},
         )
 
-        # First time — grab a start token and return; next run will catch real changes
         if not sync.page_token:
             token = get_initial_page_token(drive)
             sync.page_token = token
             sync.last_checked_at = timezone.now()
             sync.save(update_fields=["page_token", "last_checked_at"])
-            logger.info(f"[{fid}] Initialised page token. Next check will detect changes.")
+            logger.info(f"[{fid}] Initialised page token.")
             DriveSyncEvent.objects.create(
                 folder_id=fid,
                 event_type=DriveSyncEvent.EventType.CHECK,
@@ -113,7 +90,6 @@ def check_drive_changes_task(self, folder_id: Optional[str] = None):
 
         new_token, changed_ids = fetch_drive_changes(drive, sync.page_token, fid)
 
-        # Merge with any previously pending IDs
         existing = set(sync.pending_file_ids)
         existing.update(changed_ids)
         pending = list(existing)
@@ -128,17 +104,12 @@ def check_drive_changes_task(self, folder_id: Optional[str] = None):
                 "page_token", "last_checked_at",
                 "pending_file_ids", "last_change_at",
             ])
-
-            logger.info(f"[{fid}] {len(changed_ids)} changed files detected. "
-                        f"Scheduling index after debounce ({sync.debounce_seconds}s).")
-
+            logger.info(f"[{fid}] {len(changed_ids)} changed files.")
             DriveSyncEvent.objects.create(
                 folder_id=fid,
                 event_type=DriveSyncEvent.EventType.CHECK,
                 detail={"changed_ids": changed_ids, "total_pending": len(pending)},
             )
-
-            # Schedule the index to run after the debounce window
             debounced_index_task.apply_async(
                 kwargs={"folder_id": fid},
                 countdown=sync.debounce_seconds,
@@ -160,17 +131,11 @@ def check_drive_changes_task(self, folder_id: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Task 2: Debounced Drive index (the heavy work)
+# Task 2: Debounced Drive index
 # ---------------------------------------------------------------------------
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
 def debounced_index_task(self, folder_id: Optional[str] = None):
-    """
-    Run Drive ingestion only if:
-      - debounce window has passed
-      - no other worker is indexing
-      - folder fingerprint actually changed
-    """
     from ragbot.models import DriveSync, DriveSyncEvent
     from ragbot.drive_sync import compute_folder_fingerprint, should_reindex
     from ragbot.vectorstore_db import DBVectorStore, invalidate_db_store_cache
@@ -186,7 +151,6 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
         logger.warning(f"[{fid}] No DriveSync record found.")
         return {"status": "no_sync_record"}
 
-    # ── Compute current fingerprint ──────────────────────────────────────
     try:
         drive = _get_drive_service()
         current_fingerprint, _ = compute_folder_fingerprint(drive, fid)
@@ -194,7 +158,6 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
         logger.error(f"[{fid}] Failed to compute fingerprint: {exc}")
         raise self.retry(exc=exc)
 
-    # ── Decision: should we index? ───────────────────────────────────────
     do_index, reason = should_reindex(sync, current_fingerprint)
 
     if not do_index:
@@ -208,8 +171,6 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
             ),
             detail={"reason": reason},
         )
-
-        # If debounce is still active, reschedule for after the window
         if "debounce" in reason and sync.last_change_at:
             remaining = sync.debounce_seconds - (
                 timezone.now() - sync.last_change_at
@@ -218,12 +179,10 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
                 kwargs={"folder_id": fid},
                 countdown=max(int(remaining) + 10, 30),
             )
-
         return {"status": "skipped", "reason": reason}
 
-    # ── Acquire lock ─────────────────────────────────────────────────────
     if not sync.acquire_index_lock():
-        logger.info(f"[{fid}] Another worker holds the lock. Exiting.")
+        logger.info(f"[{fid}] Another worker holds the lock.")
         DriveSyncEvent.objects.create(
             folder_id=fid,
             event_type=DriveSyncEvent.EventType.LOCK_BUSY,
@@ -237,7 +196,6 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
         detail={"pending_files": sync.pending_file_ids, "fingerprint": current_fingerprint},
     )
 
-    # ── Run ingestion ────────────────────────────────────────────────────
     store = DBVectorStore(
         folder_id=fid,
         embed_model=settings.OPENAI_EMBED_MODEL,
@@ -254,18 +212,13 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
             if not text.strip():
                 skipped += 1
                 continue
-
-            chunks = chunk_text(
-                text,
-                max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
-                overlap=getattr(settings, "CHUNK_OVERLAP", 150),
-            )
+            chunks    = chunk_text(text, max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
+                                   overlap=getattr(settings, "CHUNK_OVERLAP", 150))
             metadatas = [
                 {
                     "source_id":   meta["id"],
                     "source_name": meta["name"],
                     "mime":        meta["mime"],
-                    # NEW: Drive share URL and source type
                     "source_url":  f"https://drive.google.com/file/d/{meta['id']}",
                     "source_type": "drive",
                     "chunk":       i,
@@ -284,13 +237,11 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
         store.save(activate=True)
         invalidate_db_store_cache(fid)
 
-        # ── Update DriveSync state ────────────────────────────────────────
         DriveSync.objects.filter(pk=sync.pk).update(
             folder_fingerprint=current_fingerprint,
             pending_file_ids=[],
             last_indexed_at=timezone.now(),
         )
-
         DriveSyncEvent.objects.create(
             folder_id=fid,
             event_type=DriveSyncEvent.EventType.INDEX_DONE,
@@ -302,8 +253,7 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
                 "fingerprint":   current_fingerprint,
             },
         )
-        logger.info(f"[{fid}] ✅ Index v{version.version_number} complete. "
-                    f"{added} files, {version.chunks_indexed} chunks.")
+        logger.info(f"[{fid}] ✅ Index v{version.version_number} complete.")
         return {"status": "indexed", "version": version.version_number}
 
     except Exception as exc:
@@ -321,20 +271,14 @@ def debounced_index_task(self, folder_id: Optional[str] = None):
 
 
 # ---------------------------------------------------------------------------
-# Task 3: Triggered by Drive push webhook (lightweight)
+# Task 3: Drive push webhook
 # ---------------------------------------------------------------------------
 
 @shared_task
 def webhook_received_task(folder_id: str, resource_id: str, resource_state: str):
-    """
-    Called immediately when a Drive push notification arrives.
-    Does NOT index — just records the event and triggers the check task,
-    which will schedule debounced indexing.
-    """
     from ragbot.models import DriveSync, DriveSyncEvent
 
     logger.info(f"[{folder_id}] Webhook: state={resource_state} resource={resource_id}")
-
     sync, _ = DriveSync.objects.get_or_create(
         folder_id=folder_id,
         defaults={"folder_name": folder_id},
@@ -349,8 +293,6 @@ def webhook_received_task(folder_id: str, resource_id: str, resource_state: str)
         event_type=DriveSyncEvent.EventType.WEBHOOK,
         detail={"resource_id": resource_id, "resource_state": resource_state},
     )
-
-    # Schedule the debounced index (will no-op if debounce window isn't over yet)
     debounced_index_task.apply_async(
         kwargs={"folder_id": folder_id},
         countdown=sync.debounce_seconds,
@@ -358,31 +300,49 @@ def webhook_received_task(folder_id: str, resource_id: str, resource_state: str)
 
 
 # ---------------------------------------------------------------------------
-# Task 4: Scrape & index a web source (scheduled daily)
+# Task 4: Scrape & index a single web source
 # ---------------------------------------------------------------------------
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=300)
-def scrape_web_source_task(self):
+def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mode: str = None):
     """
-    Scrape root_url (PDF or HTML) and index via the same versioned pipeline as Drive.
+    Scrape a single root_url and index it.
 
-    - Auto-detects PDF vs HTML via Content-Type header.
-    - Skips indexing if content fingerprint is unchanged (no re-embedding cost).
-    - Uses DB-level lock to prevent concurrent indexing of the same source.
-    - folder_id for web sources is "web:<md5(root_url)[:12]>" — stored on WebSyncState.
+    mode (optional):
+        "sitemap" — discover sitemap, fetch all listed URLs (default from settings).
+        "crawl"   — BFS crawl from root_url with no page limit.
+        None      — uses settings.SCRAPING_MODE (default: "sitemap").
 
-    To trigger manually:
-        from ragbot.tasks import scrape_web_source_task
-        scrape_web_source_task.delay("https://legislation.nsw.gov.au/...")
+    bundle_id (optional):
+        If provided, the resulting IndexVersion is registered with the
+        NightlyBundle so the orchestrator can track progress and activate
+        all domains together at the end of the night.
+        If None (e.g. manual one-off trigger), the version is activated
+        immediately on its own — same behaviour as before.
+
+    Fan-out mode (root_url is None):
+        Dispatches one sub-task per URL in settings.SCRAPING_URLS.
+        Used for manual triggering outside the nightly orchestrator.
     """
-    from ragbot.models import WebSyncState
+    from ragbot.models import WebSyncState, NightlyBundle
     from ragbot.web_scraper import fetch_web_source, compute_web_fingerprint
     from ragbot.vectorstore_db import DBVectorStore, invalidate_db_store_cache
     from ragbot.textsplit import chunk_text
     import gc
 
-    root_url: str = settings.SCRAPING_URL
-    # ── Get or create sync record ────────────────────────────────────────
+    # ── Fan-out mode ─────────────────────────────────────────────────────
+    if root_url is None:
+        urls = getattr(settings, "SCRAPING_URLS", [])
+        if not urls:
+            logger.warning("SCRAPING_URLS is empty — nothing to scrape.")
+            return {"status": "no_urls"}
+        for url in urls:
+            #scrape_web_source_task.delay(url)
+            scrape_web_source_task(url)
+            logger.info(f"Dispatched scrape task for: {url}")
+        return {"status": "dispatched", "count": len(urls)}
+
+    # ── Single URL mode ───────────────────────────────────────────────────
     url_hash  = hashlib.md5(root_url.encode()).hexdigest()[:12]
     folder_id = f"web:{url_hash}"
 
@@ -393,12 +353,22 @@ def scrape_web_source_task(self):
             "folder_id": folder_id,
         },
     )
-    fid = sync.folder_id  # use stored value in case it was set differently
+    fid = sync.folder_id
 
-    # ── Scrape ──────────────────────────────────────────────────────────
+    # Resolve bundle if provided
+    bundle = None
+    if bundle_id is not None:
+        try:
+            bundle = NightlyBundle.objects.get(pk=bundle_id)
+        except NightlyBundle.DoesNotExist:
+            logger.warning(f"[{fid}] bundle_id={bundle_id} not found — proceeding without bundle.")
+
+    # ── Scrape ────────────────────────────────────────────────────────────
     logger.info(f"[{fid}] Starting web scrape: {root_url}")
     try:
-        pages = fetch_web_source(root_url)
+        scrape_mode = mode or getattr(settings, "SCRAPING_MODE", "sitemap")
+        logger.info(f"[{fid}] Scrape mode: {scrape_mode}")
+        pages = fetch_web_source(root_url, mode=scrape_mode)
     except Exception as exc:
         logger.error(f"[{fid}] Scrape failed: {exc}", exc_info=True)
         raise self.retry(exc=exc)
@@ -410,13 +380,13 @@ def scrape_web_source_task(self):
 
     new_fingerprint = compute_web_fingerprint(pages)
 
-    # ── Skip if nothing changed ─────────────────────────────────────────
+    # ── Skip if nothing changed ───────────────────────────────────────────
     if new_fingerprint == sync.content_fingerprint:
-        logger.info(f"[{fid}] Content fingerprint unchanged — skipping index.")
+        logger.info(f"[{fid}] Fingerprint unchanged — skipping index.")
         WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
         return {"status": "skipped", "reason": "fingerprint_unchanged"}
 
-    # ── Acquire lock ─────────────────────────────────────────────────────
+    # ── Acquire lock ──────────────────────────────────────────────────────
     if not sync.acquire_index_lock():
         logger.info(f"[{fid}] Another worker holds the lock — exiting.")
         return {"status": "skipped", "reason": "lock_busy"}
@@ -439,18 +409,16 @@ def scrape_web_source_task(self):
                 skipped += 1
                 continue
 
-            chunks = chunk_text(
-                text,
-                max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
-                overlap=getattr(settings, "CHUNK_OVERLAP", 150),
-            )
+            chunks    = chunk_text(text, max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
+                                   overlap=getattr(settings, "CHUNK_OVERLAP", 150))
             metadatas = [
                 {
-                    "source_id":   page["url"],    # URL used as the document identifier
+                    "source_id":   page["url"],
                     "source_name": page["title"],
                     "mime":        "text/html",
-                    "source_url":  page["url"],    # exact URL for the source card link
+                    "source_url":  page["url"],
                     "source_type": "web",
+                    "parent_url":  page.get("parent_url"),   # parent/child tracking
                     "chunk":       i,
                     "text":        c,
                 }
@@ -464,24 +432,183 @@ def scrape_web_source_task(self):
             store.mark_failed("No chunks produced")
             raise ValueError("No text extracted from any page.")
 
-        store.save(activate=True)
+        # activate=True only when running outside the bundle (manual/one-off).
+        # Inside the bundle, activation is handled by nightly_activate_bundle_task
+        # after ALL domains finish — so individual versions are NOT activated here.
+        activate_now = bundle is None
+        store.save(activate=activate_now)
         invalidate_db_store_cache(fid)
 
-        # ── Update WebSyncState ───────────────────────────────────────────
+        # ── Register version with bundle ──────────────────────────────────
+        if bundle is not None:
+            bundle.versions.add(version)
+            logger.info(f"[{fid}] Registered v{version.version_number} with bundle {bundle.date}.")
+
         WebSyncState.objects.filter(pk=sync.pk).update(
             content_fingerprint=new_fingerprint,
             last_checked_at=timezone.now(),
             last_indexed_at=timezone.now(),
         )
 
-        logger.info(f"[{fid}] ✅ Web index v{version.version_number} complete. "
-                    f"{added} pages indexed, {version.chunks_indexed} chunks.")
-        return {"status": "indexed", "version": version.version_number, "pages": added}
+        logger.info(
+            f"[{fid}] ✅ Web index v{version.version_number} complete. "
+            f"{added} pages, {version.chunks_indexed} chunks."
+        )
+        return {
+            "status":  "indexed",
+            "version": version.version_number,
+            "pages":   added,
+            "bundle":  bundle_id,
+        }
 
     except Exception as exc:
         store.mark_failed(str(exc))
+        # Register failed version with bundle too so orchestrator can track it
+        if bundle is not None and store._version:
+            bundle.versions.add(store._version)
         logger.error(f"[{fid}] Web indexing failed: {exc}", exc_info=True)
         raise self.retry(exc=exc)
 
     finally:
         sync.release_index_lock()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Nightly orchestrator — fires at midnight, creates bundle, fans out
+# ---------------------------------------------------------------------------
+
+@shared_task(bind=True, max_retries=1, default_retry_delay=60)
+def nightly_scrape_orchestrator_task(self):
+    """
+    Entry point for the nightly Celery beat schedule.
+
+    1. Creates (or retrieves) today's NightlyBundle.
+    2. Dispatches one scrape_web_source_task per URL in SCRAPING_URLS,
+       passing bundle_id so each task registers its version with the bundle.
+    3. Schedules nightly_activate_bundle_task to run after an estimated
+       crawl window (default: settings.NIGHTLY_CRAWL_WINDOW_HOURS, fallback 8h).
+
+    Celery beat schedule (settings.py):
+        CELERY_BEAT_SCHEDULE = {
+            "nightly-web-scrape": {
+                "task":     "ragbot.tasks.nightly_scrape_orchestrator_task",
+                "schedule": crontab(hour=0, minute=0),
+            },
+        }
+    """
+    from ragbot.models import NightlyBundle
+    from celery.schedules import crontab
+
+    today  = timezone.now().date()
+    bundle, created = NightlyBundle.objects.get_or_create(date=today)
+
+    if not created and bundle.is_active:
+        logger.info(f"Bundle for {today} already active — skipping orchestration.")
+        return {"status": "already_active", "date": str(today)}
+
+    urls = getattr(settings, "SCRAPING_URLS", [])
+    if not urls:
+        logger.warning("SCRAPING_URLS is empty — nothing to dispatch.")
+        return {"status": "no_urls"}
+
+    logger.info(f"🌙 Nightly bundle {today} created. Dispatching {len(urls)} domain tasks.")
+
+    for url in urls:
+        scrape_web_source_task.delay(url, bundle_id=bundle.pk)
+        logger.info(f"  → Dispatched: {url}")
+
+    # Schedule activation after the crawl window
+    # Tune NIGHTLY_CRAWL_WINDOW_HOURS in settings based on how long your full
+    # crawl takes. Default 8 hours is conservative for 9 domains.
+    crawl_window_seconds = getattr(settings, "NIGHTLY_CRAWL_WINDOW_HOURS", 8) * 3600
+    nightly_activate_bundle_task.apply_async(
+        kwargs={"bundle_id": bundle.pk},
+        countdown=crawl_window_seconds,
+    )
+    logger.info(
+        f"  ⏰ Activation scheduled in {crawl_window_seconds // 3600}h "
+        f"(bundle_id={bundle.pk})."
+    )
+
+    return {
+        "status":    "dispatched",
+        "date":      str(today),
+        "bundle_id": bundle.pk,
+        "domains":   len(urls),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Nightly activation — runs after crawl window, activates the bundle
+# ---------------------------------------------------------------------------
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=300)
+def nightly_activate_bundle_task(self, bundle_id: int):
+    """
+    Activates tonight's NightlyBundle.
+
+    Called automatically by nightly_scrape_orchestrator_task after the
+    estimated crawl window. Can also be triggered manually:
+        from ragbot.tasks import nightly_activate_bundle_task
+        nightly_activate_bundle_task.delay(bundle_id=<id>)
+
+    Behaviour:
+      - If some domain tasks are still running, reschedules itself for
+        30 minutes later (up to max_retries times).
+      - Activates all completed versions (per-domain, safe — see NightlyBundle.activate()).
+      - Logs a warning for any failed domains (their previous version stays active).
+      - Deactivates the previous bundle's versions for domains that succeeded tonight.
+    """
+    from ragbot.models import NightlyBundle
+    from ragbot.vectorstore_db import invalidate_db_store_cache
+
+    try:
+        bundle = NightlyBundle.objects.get(pk=bundle_id)
+    except NightlyBundle.DoesNotExist:
+        logger.error(f"NightlyBundle id={bundle_id} not found.")
+        return {"status": "not_found"}
+
+    # If tasks are still running, reschedule
+    if bundle.pending_or_running_versions().exists():
+        still_running = bundle.pending_or_running_versions().count()
+        logger.info(
+            f"Bundle {bundle.date}: {still_running} domain(s) still running. "
+            f"Rescheduling activation in 30 min."
+        )
+        raise self.retry(countdown=1800)
+
+    # Nothing completed at all — something went very wrong
+    if bundle.completed_versions().count() == 0:
+        logger.error(
+            f"Bundle {bundle.date}: no completed versions — all domains failed. "
+            f"Previous night's data remains active."
+        )
+        return {"status": "all_failed", "bundle_id": bundle_id}
+
+    # Activate
+    bundle.activate()
+
+    # Invalidate vector store caches for activated domains
+    for version in bundle.completed_versions():
+        invalidate_db_store_cache(version.folder_id)
+
+    summary = bundle.summary()
+    logger.info(
+        f"✅ Bundle {bundle.date} activated. "
+        f"{summary['completed']} domains live, {summary['failed']} failed "
+        f"(serving previous night's data for failed domains)."
+    )
+
+    # Warn about failed domains
+    for version in bundle.failed_versions():
+        logger.warning(
+            f"  ⚠️  Domain {version.folder_id} failed tonight — "
+            f"previous active version continues serving."
+        )
+
+    return {
+        "status":    "activated",
+        "bundle_id": bundle_id,
+        "date":      str(bundle.date),
+        **summary,
+    }

@@ -181,3 +181,33 @@ LOGOUT_REDIRECT_URL = "/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 APP_ENV = os.getenv("APP_ENV", "live")
+
+hosts_string = os.environ.get('SCRAPING_URLS', '')
+
+# Split the string by commas and remove extra whitespace
+if hosts_string:
+    SCRAPING_URLS = [host.strip() for host in hosts_string.split(',')]
+else:
+    SCRAPING_URLS = []
+'''SCRAPING_URLS = [
+    #"https://education.nsw.gov.au",
+    "https://www.education.gov.au",
+    "https://legislation.nsw.gov.au",
+    #"https://nsw.gov.au",
+    #"https://www.acecqa.gov.au",
+
+
+    #"https://www.acecqa.gov.au/nqf/about/guide",
+    #"https://www.acecqa.gov.au/nqf/national-quality-standard",
+    #"https://www.acecqa.gov.au/nqf/national-law-regulations/approved-learning-frameworks",
+    #"https://www.acecqa.gov.au/nqf/national-law-regulations",
+    #"https://www.acecqa.gov.au/national-quality-framework",
+    #"https://www.acecqa.gov.au/national-quality-framework/assessment-and-rating-resources",
+    #"https://www.acecqa.gov.au/national-quality-framework/child-safety",
+    #"https://www.acecqa.gov.au/resources/opening-a-new-service",
+    #"https://www.acecqa.gov.au/national-quality-framework/nqf-elearning-modules",
+    #"https://nsw.gov.au/departments-and-agencies/nsw-early-learning-commission",
+    #"https://education.nsw.gov.au/early-childhood-education",
+    #"https://legislation.nsw.gov.au/view/whole/html/inforce/current/sl-2025-601a",
+    #"https://www.education.gov.au/early-childhood"
+]'''

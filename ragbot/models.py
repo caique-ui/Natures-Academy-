@@ -81,23 +81,26 @@ class IndexVersion(models.Model):
 
 class SourceDocument(models.Model):
     """
-    A single Drive file that was ingested as part of an IndexVersion.
+    A single Drive file or scraped web page ingested as part of an IndexVersion.
     One SourceDocument → many DocumentChunks.
+ 
+    Web sources form a tree: root pages have parent=None; every page discovered
+    by following a link records the page it was found on as its parent.
+    The tree is scoped to a single IndexVersion (rebuilt fresh each crawl run).
     """
     version = models.ForeignKey(
         IndexVersion, on_delete=models.CASCADE, related_name="documents"
     )
-    drive_file_id   = models.CharField(max_length=255)
+    drive_file_id   = models.CharField(max_length=2048)
     drive_file_name = models.CharField(max_length=512)
     mime_type       = models.CharField(max_length=255)
     char_count      = models.PositiveIntegerField(default=0)
     chunk_count     = models.PositiveIntegerField(default=0)
-
-    # NEW
+ 
     SOURCE_DRIVE = "drive"
     SOURCE_WEB   = "web"
     SOURCE_CHOICES = [(SOURCE_DRIVE, "Google Drive"), (SOURCE_WEB, "Web")]
-
+ 
     source_type = models.CharField(
         max_length=10, choices=SOURCE_CHOICES, default="drive"
     )
@@ -105,15 +108,84 @@ class SourceDocument(models.Model):
         max_length=2048, blank=True,
         help_text="Drive share URL or scraped page URL"
     )
-
+ 
+    # ── Parent / child relationship (web sources only) ────────────────────────
+    # NULL  → this is a root page (the root_url passed to the scraper task)
+    # SET   → this page was discovered as a link on the parent page
+    # on_delete=SET_NULL so deleting a parent doesn't cascade-delete children;
+    # they just become orphaned roots, which is the safest fallback.
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="children",
+        help_text="The page whose crawl discovered this URL (web sources only)",
+    )
+ 
     class Meta:
         indexes = [
             models.Index(fields=["version", "drive_file_id"]),
+            models.Index(fields=["version", "parent"]),   # fast child lookups
         ]
-
+ 
     def __str__(self):
         return f"{self.drive_file_name} (v{self.version.version_number})"
-
+ 
+    # ── Tree helpers ──────────────────────────────────────────────────────────
+ 
+    def get_children(self) -> models.QuerySet:
+        """Return all direct children of this page within the same version."""
+        return self.children.filter(version=self.version)
+ 
+    def get_ancestors(self) -> list["SourceDocument"]:
+        """
+        Walk up the parent chain and return ancestors root-first.
+        Stops at the root (parent=None) or after 50 hops to guard against
+        accidental cycles from redirect loops.
+        """
+        ancestors = []
+        node = self
+        seen = {self.pk}
+        for _ in range(50):
+            if node.parent_id is None:
+                break
+            node = node.parent
+            if node.pk in seen:
+                break          # cycle guard
+            seen.add(node.pk)
+            ancestors.append(node)
+        ancestors.reverse()    # root → … → direct parent
+        return ancestors
+ 
+    def get_descendants(self) -> list["SourceDocument"]:
+        """
+        BFS over children within the same version.
+        Returns a flat list in breadth-first order (children before grandchildren).
+        Stops at 500 nodes to keep memory bounded.
+        """
+        from collections import deque
+        result = []
+        queue  = deque(self.get_children())
+        seen   = {self.pk}
+        while queue and len(result) < 500:
+            node = queue.popleft()
+            if node.pk in seen:
+                continue
+            seen.add(node.pk)
+            result.append(node)
+            queue.extend(node.get_children())
+        return result
+ 
+    def get_tree_path(self) -> str:
+        """
+        Human-readable URL breadcrumb, e.g.:
+          https://example.gov.au → /regulations → /regulations/2024
+        """
+        ancestors = self.get_ancestors()
+        parts = [a.source_url or a.drive_file_name for a in ancestors]
+        parts.append(self.source_url or self.drive_file_name)
+        return " → ".join(parts)
 
 class DocumentChunk(models.Model):
     """
@@ -405,3 +477,164 @@ class Message(models.Model):
  
     def __str__(self):
         return f"[{self.role}] {self.content[:60]}"
+    
+class ScrapedURL(models.Model):
+    """
+    Permanent record of every URL successfully scraped.
+    Used to skip re-crawling URLs already indexed today,
+    even if they're discovered via a different root or parent.
+    """
+    url             = models.URLField(max_length=2048, unique=True, db_index=True)
+    content_hash    = models.CharField(max_length=64, blank=True)
+    last_scraped_at = models.DateTimeField(default=timezone.now)
+    source_version  = models.ForeignKey(
+        IndexVersion,
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        help_text="The version this URL was last indexed into"
+    )
+
+    class Meta:
+        verbose_name = "Scraped URL Cache"
+
+    def __str__(self):
+        return f"{self.url} @ {self.last_scraped_at:%Y-%m-%d}"
+
+    @classmethod
+    def was_scraped_today(cls, url: str) -> bool:
+        from django.utils import timezone
+        today = timezone.now().date()
+        return cls.objects.filter(
+            url=url,
+            last_scraped_at__date=today,
+        ).exists()
+
+    @classmethod
+    def mark_scraped(cls, url: str, content_hash: str = "", version=None):
+        cls.objects.update_or_create(
+            url=url,
+            defaults={
+                "content_hash":    content_hash,
+                "last_scraped_at": timezone.now(),
+                "source_version":  version,
+            }
+        )
+
+
+class NightlyBundle(models.Model):
+    """
+    Groups all per-domain IndexVersions created during a single nightly crawl run.
+
+    Lifecycle:
+        1. nightly_scrape_orchestrator_task creates a NightlyBundle(date=today)
+        2. Each scrape_web_source_task completes → registers its IndexVersion
+           with the bundle via bundle.versions.add(version)
+        3. nightly_activate_bundle_task fires after all domains finish:
+           - calls bundle.activate() which activates completed versions
+           - deactivates the previous night's bundle's versions (per domain)
+           - failed domain versions are skipped → previous night's version
+             for that domain stays active (answers still served from it)
+
+    Rollback:
+        Set yesterday's NightlyBundle.is_active=True and call its activate()
+        to restore the previous night's data across all domains atomically.
+    """
+    date = models.DateField(
+        unique=True,
+        db_index=True,
+        help_text="The calendar date this bundle was created for (midnight run date)",
+    )
+    is_active = models.BooleanField(
+        default=False,
+        help_text="True for the currently serving bundle",
+    )
+    versions = models.ManyToManyField(
+        "IndexVersion",
+        blank=True,
+        related_name="bundles",
+        help_text="All IndexVersions (any status) created during this nightly run",
+    )
+
+    created_at   = models.DateTimeField(default=timezone.now)
+    activated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-date"]
+        verbose_name        = "Nightly Bundle"
+        verbose_name_plural = "Nightly Bundles"
+
+    def __str__(self):
+        status = "active" if self.is_active else "inactive"
+        return f"NightlyBundle({self.date}, {status})"
+
+    # ── Queryset helpers ──────────────────────────────────────────────────
+
+    def completed_versions(self):
+        return self.versions.filter(status=IndexVersion.Status.COMPLETED)
+
+    def failed_versions(self):
+        return self.versions.filter(status=IndexVersion.Status.FAILED)
+
+    def pending_or_running_versions(self):
+        return self.versions.filter(
+            status__in=[IndexVersion.Status.PENDING, IndexVersion.Status.RUNNING]
+        )
+
+    def is_fully_finished(self) -> bool:
+        """
+        True when every domain task has finished (pass or fail).
+        Used by nightly_activate_bundle_task to know it's safe to activate.
+        """
+        from django.conf import settings
+        expected = len(getattr(settings, "SCRAPING_URLS", []))
+        if expected == 0:
+            return False
+        return self.pending_or_running_versions().count() == 0 and \
+               self.versions.count() >= expected
+
+    # ── Activation ───────────────────────────────────────────────────────
+
+    def activate(self):
+        """
+        Activate completed versions in this bundle.
+
+        Per-domain logic (key correctness guarantee):
+          - Only deactivates a previous version for domain X if tonight's
+            version for domain X completed successfully.
+          - If tonight's version for domain X failed, the previous active
+            version for X is left untouched → answers keep being served.
+
+        This means after activation:
+          - Successful domains  → tonight's fresh data
+          - Failed domains      → last successful night's data (no gap)
+        """
+        from django.db import transaction
+
+        with transaction.atomic():
+            completed = list(self.completed_versions().select_related())
+
+            for version in completed:
+                # Deactivate the previous active version for this folder_id only
+                IndexVersion.objects.filter(
+                    folder_id=version.folder_id,
+                    is_active=True,
+                ).exclude(pk=version.pk).update(is_active=False)
+
+                # Activate tonight's version
+                version.is_active = True
+                version.save(update_fields=["is_active"])
+
+            self.is_active   = True
+            self.activated_at = timezone.now()
+            self.save(update_fields=["is_active", "activated_at"])
+
+    # ── Summary ──────────────────────────────────────────────────────────
+
+    def summary(self) -> dict:
+        return {
+            "date":      str(self.date),
+            "completed": self.completed_versions().count(),
+            "failed":    self.failed_versions().count(),
+            "pending":   self.pending_or_running_versions().count(),
+            "is_active": self.is_active,
+        }

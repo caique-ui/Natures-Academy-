@@ -188,6 +188,7 @@ class DBVectorStore:
                 "mime_type":       meta["mime"],
                 "source_url":      meta.get("source_url", ""),
                 "source_type":     meta.get("source_type", "drive"),
+                "parent_url":      meta.get("parent_url"),   # None for Drive & root pages
                 "chunk_index":     meta["chunk"],
                 "text":            text,      # original preserved for LLM
                 "embedding":       vec,       # from cleaned text
@@ -210,20 +211,61 @@ class DBVectorStore:
             docs_map: Dict[str, SourceDocument] = {}
             doc_chunk_counts: Dict[str, int] = {}
 
+            # ── Pass 1: create all SourceDocument rows without parent set yet ──
+            # We need every doc to exist before we can resolve parent FKs,
+            # because a parent page may appear later in the chunk list than
+            # one of its children (BFS order isn't guaranteed end-to-end).
             for c in chunks:
                 fid = c["drive_file_id"]
                 if fid not in docs_map:
                     doc = SourceDocument.objects.create(
                         version=version,
-                        drive_file_id=fid,
-                        drive_file_name=c["drive_file_name"],
+                        drive_file_id=fid[:2048],
+                        drive_file_name=c["drive_file_name"][:512],
                         mime_type=c["mime_type"],
                         source_url=c.get("source_url", ""),
                         source_type=c.get("source_type", "drive"),
+                        parent=None,   # resolved in Pass 2
                     )
                     docs_map[fid] = doc
                     doc_chunk_counts[fid] = 0
                 doc_chunk_counts[fid] += 1
+
+            # ── Pass 2: resolve parent_url → SourceDocument FK ────────────────
+            # Build a lookup from source_url → SourceDocument for web docs only.
+            # Drive docs always have parent=None (they live in a flat folder).
+            url_to_doc: Dict[str, SourceDocument] = {
+                doc.source_url: doc
+                for doc in docs_map.values()
+                if doc.source_url
+            }
+            # Collect docs that need their parent set (avoid redundant UPDATE calls)
+            need_parent_update: list[SourceDocument] = []
+            # Track which parent_url each doc needs (keyed by drive_file_id / URL)
+            parent_url_map: Dict[str, str | None] = {}
+            for c in chunks:
+                fid = c["drive_file_id"]
+                if fid not in parent_url_map:
+                    parent_url_map[fid] = c.get("parent_url")
+
+            for fid, parent_url in parent_url_map.items():
+                if not parent_url:
+                    continue  # root page or Drive doc — leave parent=None
+                parent_doc = url_to_doc.get(parent_url)
+                if parent_doc is None:
+                    # Parent URL was skipped (e.g. empty content) — leave as root
+                    logger.warning(
+                        f"[{self.folder_id}] parent_url {parent_url!r} not found "
+                        f"in this version's docs — treating {fid!r} as root."
+                    )
+                    continue
+                doc = docs_map[fid]
+                doc.parent = parent_doc
+                need_parent_update.append(doc)
+
+            if need_parent_update:
+                SourceDocument.objects.bulk_update(need_parent_update, ["parent"], batch_size=500)
+                print(f"  🌳 Parent links set for {len(need_parent_update)} web page(s).")
 
             db_chunks = [
                 DocumentChunk(
