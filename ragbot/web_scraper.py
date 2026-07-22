@@ -22,6 +22,10 @@ from django.conf import settings
 import requests
 
 logger = logging.getLogger(__name__)
+from filelock import FileLock
+import os
+
+_UC_DRIVER_LOCK_PATH = "/tmp/uc_driver_patch.lock"
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -1324,7 +1328,10 @@ def _make_selenium_driver(download_dir: str | None = None):
         options.add_argument(f"--user-data-dir={profile_dir}")
 
     chrome_version = getattr(settings, "CHROME_VERSION", None)
-    driver = uc.Chrome(options=options, version_main=chrome_version)
+    lock = FileLock(_UC_DRIVER_LOCK_PATH, timeout=90)
+    with lock:
+        driver = uc.Chrome(options=options, version_main=chrome_version)
+
     driver.set_page_load_timeout(300)
     return driver
 
