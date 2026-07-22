@@ -1292,10 +1292,6 @@ def _selenium_get_content_type(url: str) -> str:
         driver.quit()
 
 def _get_uc_driver_lock() -> FileLock:
-    # Ensure the lock file is creatable/writable across different
-    # system users (e.g. Celery worker user vs. manage.py run as root/self),
-    # since a lock file created by one user with default 0644 perms will
-    # raise PermissionError for any other user trying to acquire it.
     old_umask = os.umask(0)
     try:
         lock = FileLock(_UC_DRIVER_LOCK_PATH, timeout=90, mode=0o666)
