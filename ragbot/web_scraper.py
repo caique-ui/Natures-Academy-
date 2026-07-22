@@ -1154,7 +1154,7 @@ def _collect_links(
 # ---------------------------------------------------------------------------
 
 def _capture_screenshot(driver, name: str):
-    try:
+    '''try:
         timestamp = int(time.time())
         safe_name = "".join(c for c in name if c.isalnum() or c in ("_", "-")).rstrip()
         filepath  = os.path.join(DEBUG_DIR, f"{timestamp}_{safe_name}.png")
@@ -1162,7 +1162,7 @@ def _capture_screenshot(driver, name: str):
         driver.save_screenshot(filepath)
         print(f"📸 Screenshot -> {filepath}")
     except Exception as e:
-        logger.warning(f"Screenshot failed: {e}")
+        logger.warning(f"Screenshot failed: {e}")'''
 
 
 # ---------------------------------------------------------------------------
