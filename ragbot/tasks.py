@@ -337,8 +337,8 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
             logger.warning("SCRAPING_URLS is empty — nothing to scrape.")
             return {"status": "no_urls"}
         for url in urls:
-            #scrape_web_source_task.delay(url)
-            scrape_web_source_task(url)
+            scrape_web_source_task.delay(url)
+            #scrape_web_source_task(url)
             logger.info(f"Dispatched scrape task for: {url}")
         return {"status": "dispatched", "count": len(urls)}
 
