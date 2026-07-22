@@ -1291,6 +1291,17 @@ def _selenium_get_content_type(url: str) -> str:
     finally:
         driver.quit()
 
+def _get_uc_driver_lock() -> FileLock:
+    # Ensure the lock file is creatable/writable across different
+    # system users (e.g. Celery worker user vs. manage.py run as root/self),
+    # since a lock file created by one user with default 0644 perms will
+    # raise PermissionError for any other user trying to acquire it.
+    old_umask = os.umask(0)
+    try:
+        lock = FileLock(_UC_DRIVER_LOCK_PATH, timeout=90, mode=0o666)
+    finally:
+        os.umask(old_umask)
+    return lock
 
 # ---------------------------------------------------------------------------
 # Selenium driver factory
@@ -1328,7 +1339,7 @@ def _make_selenium_driver(download_dir: str | None = None):
         options.add_argument(f"--user-data-dir={profile_dir}")
 
     chrome_version = getattr(settings, "CHROME_VERSION", None)
-    lock = FileLock(_UC_DRIVER_LOCK_PATH, timeout=90)
+    lock = _get_uc_driver_lock()
     with lock:
         driver = uc.Chrome(options=options, version_main=chrome_version)
 
