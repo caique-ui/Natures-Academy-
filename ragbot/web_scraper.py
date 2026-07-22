@@ -17,6 +17,7 @@ import tempfile
 import os
 import urllib.robotparser
 from urllib.parse import urljoin, urlparse, urlunparse
+from django.conf import settings
 
 import requests
 
@@ -1322,7 +1323,7 @@ def _make_selenium_driver(download_dir: str | None = None):
         profile_dir = tempfile.mkdtemp(prefix="chrome_profile_")
         options.add_argument(f"--user-data-dir={profile_dir}")
 
-    driver = uc.Chrome(options=options, version_main=150)
+    driver = uc.Chrome(options=options, version_main=settings.CHROME_VERSION)
     driver.set_page_load_timeout(300)
     return driver
 
