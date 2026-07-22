@@ -181,7 +181,10 @@ LOGOUT_REDIRECT_URL = "/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 APP_ENV = os.getenv("APP_ENV", "live")
-CHROME_VERSION = os.getenv("CHROME_VERSION", None)
+
+chrome_version_str = os.getenv("CHROME_VERSION")
+CHROME_VERSION = int(chrome_version_str) if chrome_version_str else None
+
 hosts_string = os.environ.get('SCRAPING_URLS', '')
 
 # Split the string by commas and remove extra whitespace
