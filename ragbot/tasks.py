@@ -368,7 +368,7 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
     try:
         scrape_mode = mode or getattr(settings, "SCRAPING_MODE", "sitemap")
         logger.info(f"[{fid}] Scrape mode: {scrape_mode}")
-        pages = fetch_web_source(root_url, mode=scrape_mode)
+        pages = fetch_web_source(root_url, mode=scrape_mode, force_recrawl=True)
     except Exception as exc:
         logger.error(f"[{fid}] Scrape failed: {exc}", exc_info=True)
         raise self.retry(exc=exc)

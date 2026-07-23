@@ -639,12 +639,20 @@ def _crawl_from_sitemap(
     urls: list[str],
     root_url: str,
     use_selenium: bool = False,
+    force_recrawl: bool = False,
 ) -> list[dict]:
     """
     Fetch and extract content from a pre-built list of URLs (from sitemap).
     Same extraction logic as _crawl_html but no link discovery needed —
     the sitemap already gives us the complete URL list.
     No max_pages limit — processes every URL in the sitemap.
+
+    force_recrawl:
+        When True, bypasses the ScrapedURL "already scraped today" cache
+        check so URLs get re-fetched even if they were marked scraped
+        earlier (e.g. retrying after a failed/partial run). This does NOT
+        affect the in-run `visited` set — a URL is still only fetched once
+        per call even with force_recrawl=True.
     """
     try:
         from bs4 import BeautifulSoup
@@ -673,15 +681,16 @@ def _crawl_from_sitemap(
             if not url or url in visited or _should_skip(url):
                 continue
 
-            # ScrapedURL cache check
-            try:
-                from ragbot.models import ScrapedURL
-                if ScrapedURL.was_scraped_today(url):
-                    logger.info(f"⏭️  Already scraped today: {url}")
-                    visited.add(url)
-                    continue
-            except Exception:
-                pass
+            # ScrapedURL cache check (skipped entirely when force_recrawl=True)
+            if not force_recrawl:
+                try:
+                    from ragbot.models import ScrapedURL
+                    if ScrapedURL.was_scraped_today(url):
+                        logger.info(f"⏭️  Already scraped today: {url}")
+                        visited.add(url)
+                        continue
+                except Exception:
+                    pass
 
             visited.add(url)
             print(f"🔍 [{pages_fetched+1}/{total}] {url}")
@@ -722,6 +731,7 @@ def _crawl_from_sitemap(
                         _discover_and_extract_attachments(
                             soup, final_url, root_url, robots_parser,
                             session, driver, visited, results,
+                            force_recrawl=force_recrawl,
                         )
                     pages_fetched      += 1
                     session_page_count += 1
@@ -762,6 +772,7 @@ def _crawl_from_sitemap(
                                 _discover_and_extract_attachments(
                                     soup, final_url, root_url, robots_parser,
                                     session, driver, visited, results,
+                                    force_recrawl=force_recrawl,
                                 )
                             pages_fetched      += 1
                             session_page_count += 1
@@ -838,6 +849,7 @@ def _crawl_from_sitemap(
                         _discover_and_extract_attachments(
                             soup, url, root_url, robots_parser,
                             session, driver, visited, results,
+                            force_recrawl=force_recrawl,
                         )
                     pages_fetched += 1
 
@@ -963,11 +975,16 @@ def _discover_and_extract_attachments(
     driver,
     visited: set,
     results: list,
+    force_recrawl: bool = False,
 ) -> None:
     """
     Find and fetch any attachment links on a sitemap-crawled HTML page.
     Mutates `results` (extends) and `visited` (adds fetched attachment URLs)
     in place. Each extracted attachment page is tagged with parent_url.
+
+    force_recrawl:
+        When True, bypasses the ScrapedURL cache check for attachments too.
+        The `visited` set dedup above still applies regardless.
     """
     if not soup:
         return
@@ -976,13 +993,14 @@ def _discover_and_extract_attachments(
             continue
         visited.add(att_url)
 
-        try:
-            from ragbot.models import ScrapedURL
-            if ScrapedURL.was_scraped_today(att_url):
-                logger.info(f"⏭️  Attachment already scraped today: {att_url}")
-                continue
-        except Exception:
-            pass
+        if not force_recrawl:
+            try:
+                from ragbot.models import ScrapedURL
+                if ScrapedURL.was_scraped_today(att_url):
+                    logger.info(f"⏭️  Attachment already scraped today: {att_url}")
+                    continue
+            except Exception:
+                pass
 
         print(f"  📎 Attachment discovered on {parent_url}: {att_url}")
         pages = _fetch_attachment(session, att_url, driver=driver)
@@ -1177,6 +1195,7 @@ def fetch_web_source(
     root_url: str,
     mode: str = "sitemap",
     max_pages: int | None = None,
+    force_recrawl: bool = False,
 ) -> list[dict]:
     """
     Main entry point for scraping a web source.
@@ -1194,6 +1213,15 @@ def fetch_web_source(
     max_pages:
         Only applies to "crawl" mode. None = no limit (crawl entire site).
         Set to an integer to cap the crawl (useful for testing).
+
+    force_recrawl:
+        Set True to bypass the ScrapedURL "already scraped today" cache and
+        re-fetch every URL regardless of when it was last scraped. Use this
+        to retry a domain whose previous run failed/crashed partway through,
+        so URLs it already marked scraped (but never actually persisted)
+        get picked up again. Within a single call, each URL is still only
+        fetched once — this only affects the cross-run cache, not the
+        in-run `visited` dedup.
     """
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
@@ -1217,7 +1245,10 @@ def fetch_web_source(
         sitemap_urls = _discover_sitemap(root_url, robots_parser)
         if sitemap_urls:
             print(f"🗺️  Sitemap mode: {len(sitemap_urls)} URLs to process")
-            return _crawl_from_sitemap(session, sitemap_urls, root_url, use_selenium)
+            return _crawl_from_sitemap(
+                session, sitemap_urls, root_url, use_selenium,
+                force_recrawl=force_recrawl,
+            )
         else:
             # No sitemap found — fall back to BFS crawl with no limit
             print(f"⚠️  No sitemap found — falling back to BFS crawl (no page limit)")
@@ -1226,6 +1257,7 @@ def fetch_web_source(
                 max_pages=None,
                 use_selenium=use_selenium,
                 robots_rules=robots,
+                force_recrawl=force_recrawl,
             )
 
     else:
@@ -1236,6 +1268,7 @@ def fetch_web_source(
             max_pages=max_pages,
             use_selenium=use_selenium,
             robots_rules=robots,
+            force_recrawl=force_recrawl,
         )
 
 
@@ -1835,6 +1868,7 @@ def _crawl_html(
     use_selenium: bool = False,
     delay: float = 1.0,
     robots_rules: dict | None = None,  # pass in if already fetched
+    force_recrawl: bool = False,   # bypass ScrapedURL cache; in-run `visited` dedup still applies
 ) -> list[dict]:
     try:
         from bs4 import BeautifulSoup
@@ -1874,15 +1908,16 @@ def _crawl_html(
                 logger.debug(f"  ⛔ Filtered: {url}")
                 continue
 
-            # ── ScrapedURL cache check ────────────────────────────────────
-            try:
-                from ragbot.models import ScrapedURL
-                if ScrapedURL.was_scraped_today(url):
-                    logger.info(f"⏭️  Already scraped today: {url}")
-                    visited.add(url)
-                    continue
-            except Exception:
-                pass
+            # ── ScrapedURL cache check (skipped entirely when force_recrawl=True) ──
+            if not force_recrawl:
+                try:
+                    from ragbot.models import ScrapedURL
+                    if ScrapedURL.was_scraped_today(url):
+                        logger.info(f"⏭️  Already scraped today: {url}")
+                        visited.add(url)
+                        continue
+                except Exception:
+                    pass
 
             visited.add(url)
             print(f"🔍 Queue: {len(queue)} | Fetched: {pages_fetched} | {url}")
