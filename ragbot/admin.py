@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import IndexVersion, SourceDocument, DriveSync, DriveSyncEvent, ScrapedURL
+from .models import IndexVersion, SourceDocument, DriveSync, DriveSyncEvent, ScrapedURL, DocumentChunk
 
 @admin.register(IndexVersion)
 class IndexVersionAdmin(admin.ModelAdmin):
@@ -30,3 +30,9 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 class ScrapedURLAdmin(admin.ModelAdmin):
     list_display  = ["url", "content_hash", "last_scraped_at", "source_version"]
     list_filter   = ["url", "last_scraped_at", "source_version"]
+
+@admin.register(DocumentChunk)
+class DocumentChunkAdmin(admin.ModelAdmin):
+    list_display  = ["version", "source_document", "chunk_index"]
+    list_filter   = ["source_document"]
+    readonly_fields = ["text", "embedding"]
