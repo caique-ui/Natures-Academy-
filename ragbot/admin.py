@@ -33,6 +33,6 @@ class ScrapedURLAdmin(admin.ModelAdmin):
 
 @admin.register(DocumentChunk)
 class DocumentChunkAdmin(admin.ModelAdmin):
-    list_display  = ["version", "source_document", "chunk_index"]
-    list_filter   = ["source_document"]
+    list_display  = ["version", "document", "chunk_index"]
+    list_filter   = ["document"]
     readonly_fields = ["text", "embedding"]
