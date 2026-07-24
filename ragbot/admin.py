@@ -28,5 +28,5 @@ class SourceDocumentAdmin(admin.ModelAdmin):
 
 @admin.register(ScrapedURL)
 class ScrapedURLAdmin(admin.ModelAdmin):
-    list_display  = ["url", "title", "description"]
-    list_filter   = ["title"]
+    list_display  = ["url", "content_hash", "last_scraped_at", "source_version"]
+    list_filter   = ["url", "last_scraped_at", "source_version"]
