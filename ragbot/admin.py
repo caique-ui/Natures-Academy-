@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import IndexVersion, SourceDocument, DriveSync, DriveSyncEvent
+from .models import IndexVersion, SourceDocument, DriveSync, DriveSyncEvent, ScrapedURL
 
 @admin.register(IndexVersion)
 class IndexVersionAdmin(admin.ModelAdmin):
@@ -25,3 +25,8 @@ class DriveSyncEventAdmin(admin.ModelAdmin):
 class SourceDocumentAdmin(admin.ModelAdmin):
     list_display  = ["drive_file_name", "mime_type", "chunk_count", "version"]
     list_filter   = ["mime_type"]
+
+@admin.register(ScrapedURL)
+class ScrapedURLAdmin(admin.ModelAdmin):
+    list_display  = ["url", "title", "description"]
+    list_filter   = ["title"]
