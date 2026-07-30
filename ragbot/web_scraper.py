@@ -16,6 +16,7 @@ import time
 import tempfile
 import os
 import urllib.robotparser
+from typing import Callable
 from urllib.parse import urljoin, urlparse, urlunparse
 from django.conf import settings
 
@@ -26,6 +27,41 @@ from filelock import FileLock
 import os
 
 _UC_DRIVER_LOCK_PATH = "/tmp/uc_driver_patch.lock"
+
+# How many extracted pages to hold in memory before flushing to the caller's
+# on_batch callback. Only used when on_batch is provided (large-site mode,
+# e.g. 15,000+ page sitemaps) — keeps memory flat regardless of crawl size.
+DEFAULT_BATCH_SIZE = 100
+
+
+def _maybe_flush(
+    results: list[dict],
+    on_batch: "Callable[[list[dict]], None] | None",
+    batch_size: int,
+    page_meta: list[dict],
+    force: bool = False,
+) -> None:
+    """
+    If on_batch is set and results has reached batch_size (or force=True for
+    the final flush), hand the batch to on_batch and clear results in place.
+    Before clearing, records lightweight {url, content_hash} entries into
+    page_meta so the caller can still compute a fingerprint / page count
+    without needing to hold full page text for the whole crawl.
+    No-op if on_batch is None — preserves the old accumulate-everything
+    behavior for callers that don't pass on_batch.
+    """
+    if on_batch is None:
+        return
+    if not (force or len(results) >= batch_size):
+        return
+    if not results:
+        return
+    batch = list(results)
+    results.clear()
+    for p in batch:
+        page_meta.append({"url": p["url"], "content_hash": p.get("content_hash", "")})
+    on_batch(batch)
+
 
 REQUEST_HEADERS = {
     "User-Agent": (
@@ -148,7 +184,7 @@ DOMAIN_CRAWL_RULES: dict[str, dict] = {
         "blocked_nav_ids":  [],
         "disallowed_paths": [
             "/admin/", "/user/", "/search/", "/node/",
-            "/comment/reply/", "/filter/tips",
+            "/comment/reply/", "/filter/tips", "/about-us/",
         ],
         "sitemap_url": "https://www.education.gov.au/sitemap.xml",
         "sitemap_needs_selenium": True,
@@ -162,9 +198,10 @@ DOMAIN_CRAWL_RULES: dict[str, dict] = {
         "blocked_nav_ids":  [],
         "disallowed_paths": [
             "/admin/", "/user/", "/search/", "/node/",
-            "/comment/reply/", "/filter/tips",
+            "/comment/reply/", "/filter/tips", "/about-us/"
         ],
-        "sitemap_url": "https://education.nsw.gov.au/sitemap.xml",
+        #"sitemap_url": "https://education.nsw.gov.au/sitemap.xml",
+        "sitemap_url": "https://education.nsw.gov.au/sitemap-early-childhood-education.xml",
         "sitemap_needs_selenium": True,
     },
 
@@ -640,6 +677,8 @@ def _crawl_from_sitemap(
     root_url: str,
     use_selenium: bool = False,
     force_recrawl: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[dict]:
     """
     Fetch and extract content from a pre-built list of URLs (from sitemap).
@@ -653,6 +692,19 @@ def _crawl_from_sitemap(
         earlier (e.g. retrying after a failed/partial run). This does NOT
         affect the in-run `visited` set — a URL is still only fetched once
         per call even with force_recrawl=True.
+
+    on_batch:
+        Optional callback for large sites (e.g. 15,000+ page sitemaps).
+        When provided, extracted pages are flushed to this callback every
+        `batch_size` pages instead of being accumulated for the whole
+        crawl, keeping memory flat regardless of crawl size. In this mode,
+        ScrapedURL.mark_scraped() is NOT called inline — it's the caller's
+        responsibility to mark URLs scraped only after it has actually
+        persisted the batch (see handle_batch pattern in tasks.py), so a
+        crash mid-crawl never leaves a page marked-scraped-but-lost.
+        When omitted (default), behavior is unchanged: pages accumulate in
+        `results`, mark_scraped fires inline as before, and the full list
+        is returned at the end.
     """
     try:
         from bs4 import BeautifulSoup
@@ -665,6 +717,7 @@ def _crawl_from_sitemap(
     robots_parser = robots["parser"]
 
     results:  list[dict] = []
+    page_meta: list[dict] = []   # lightweight {url, content_hash} — populated on each flush
     visited:  set[str]   = set()
     total                = len(urls)
 
@@ -732,6 +785,7 @@ def _crawl_from_sitemap(
                             soup, final_url, root_url, robots_parser,
                             session, driver, visited, results,
                             force_recrawl=force_recrawl,
+                            defer_mark_scraped=bool(on_batch),
                         )
                     pages_fetched      += 1
                     session_page_count += 1
@@ -773,6 +827,7 @@ def _crawl_from_sitemap(
                                     soup, final_url, root_url, robots_parser,
                                     session, driver, visited, results,
                                     force_recrawl=force_recrawl,
+                                    defer_mark_scraped=bool(on_batch),
                                 )
                             pages_fetched      += 1
                             session_page_count += 1
@@ -784,6 +839,7 @@ def _crawl_from_sitemap(
                             pages_fetched += 1
                         except Exception as exc2:
                             logger.warning(f"Selenium fallback failed {url}: {exc2}")
+                        _maybe_flush(results, on_batch, batch_size, page_meta)
                         continue
 
                     resp.raise_for_status()
@@ -796,10 +852,12 @@ def _crawl_from_sitemap(
                             page_hash = pdf_pages[0]["content_hash"]
                         pages_fetched += 1
                         _human_delay_between_pages(pages_fetched, crawl_delay)
-                        try:
-                            ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                        except Exception:
-                            pass
+                        if not on_batch:
+                            try:
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                            except Exception:
+                                pass
+                        _maybe_flush(results, on_batch, batch_size, page_meta)
                         continue
 
                     if any(x in ct for x in [
@@ -812,10 +870,12 @@ def _crawl_from_sitemap(
                             page_hash = docx_pages[0]["content_hash"]
                         pages_fetched += 1
                         _human_delay_between_pages(pages_fetched, crawl_delay)
-                        try:
-                            ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                        except Exception:
-                            pass
+                        if not on_batch:
+                            try:
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                            except Exception:
+                                pass
+                        _maybe_flush(results, on_batch, batch_size, page_meta)
                         continue
 
                     if "text/csv" in ct or url.lower().endswith(".csv"):
@@ -825,10 +885,12 @@ def _crawl_from_sitemap(
                             page_hash = csv_pages[0]["content_hash"]
                         pages_fetched += 1
                         _human_delay_between_pages(pages_fetched, crawl_delay)
-                        try:
-                            ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                        except Exception:
-                            pass
+                        if not on_batch:
+                            try:
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                            except Exception:
+                                pass
+                        _maybe_flush(results, on_batch, batch_size, page_meta)
                         continue
 
                     if "text/html" not in ct:
@@ -850,6 +912,7 @@ def _crawl_from_sitemap(
                             soup, url, root_url, robots_parser,
                             session, driver, visited, results,
                             force_recrawl=force_recrawl,
+                            defer_mark_scraped=bool(on_batch),
                         )
                     pages_fetched += 1
 
@@ -857,8 +920,9 @@ def _crawl_from_sitemap(
                     logger.warning(f"Request failed {url}: {exc}")
                     continue
 
-            # Mark as scraped
-            if page_hash:
+            # Mark as scraped (inline mode only — batched mode defers this to
+            # the caller, after it confirms the batch was actually persisted)
+            if page_hash and not on_batch:
                 try:
                     ScrapedURL.mark_scraped(final_url, content_hash=page_hash)
                     if final_url != url:
@@ -868,14 +932,16 @@ def _crawl_from_sitemap(
 
             visited.add(final_url)
             _human_delay_between_pages(pages_fetched, crawl_delay)
+            _maybe_flush(results, on_batch, batch_size, page_meta)
 
     finally:
         if driver:
             print("🔌 Closing Selenium session.")
             driver.quit()
 
-    print(f"✅ Sitemap crawl complete. {len(results)} pages from {root_url}")
-    return results
+    _maybe_flush(results, on_batch, batch_size, page_meta, force=True)
+    print(f"✅ Sitemap crawl complete. {pages_fetched} pages from {root_url}")
+    return page_meta if on_batch else results
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1042,7 @@ def _discover_and_extract_attachments(
     visited: set,
     results: list,
     force_recrawl: bool = False,
+    defer_mark_scraped: bool = False,
 ) -> None:
     """
     Find and fetch any attachment links on a sitemap-crawled HTML page.
@@ -985,6 +1052,11 @@ def _discover_and_extract_attachments(
     force_recrawl:
         When True, bypasses the ScrapedURL cache check for attachments too.
         The `visited` set dedup above still applies regardless.
+
+    defer_mark_scraped:
+        Pass True when the caller is batching (on_batch is set) — skips the
+        inline mark_scraped call here, since the caller will mark these URLs
+        scraped itself only after it confirms the batch was persisted.
     """
     if not soup:
         return
@@ -1008,7 +1080,7 @@ def _discover_and_extract_attachments(
             page["parent_url"] = parent_url
         results.extend(pages)
 
-        if pages:
+        if pages and not defer_mark_scraped:
             try:
                 ScrapedURL.mark_scraped(att_url, content_hash=pages[0]["content_hash"])
             except Exception:
@@ -1196,6 +1268,8 @@ def fetch_web_source(
     mode: str = "sitemap",
     max_pages: int | None = None,
     force_recrawl: bool = False,
+    on_batch: "Callable[[list[dict]], None] | None" = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[dict]:
     """
     Main entry point for scraping a web source.
@@ -1217,11 +1291,20 @@ def fetch_web_source(
     force_recrawl:
         Set True to bypass the ScrapedURL "already scraped today" cache and
         re-fetch every URL regardless of when it was last scraped. Use this
-        to retry a domain whose previous run failed/crashed partway through,
-        so URLs it already marked scraped (but never actually persisted)
-        get picked up again. Within a single call, each URL is still only
-        fetched once — this only affects the cross-run cache, not the
-        in-run `visited` dedup.
+        to retry a domain whose previous run failed/crashed partway through.
+        Within a single call, each URL is still only fetched once — this
+        only affects the cross-run cache, not the in-run `visited` dedup.
+
+    on_batch:
+        Optional callback for large sites (e.g. 15,000+ page sitemaps).
+        When provided, pages are flushed to this callback every `batch_size`
+        pages instead of being held in memory for the whole crawl, and
+        ScrapedURL.mark_scraped() is deferred to the caller (it should mark
+        each batch's URLs scraped only after actually persisting them —
+        see handle_batch pattern in tasks.py). The return value in this mode
+        is a lightweight list of {"url", "content_hash"} dicts (no page
+        text) suitable for compute_web_fingerprint(), not the full pages.
+        When omitted (default), behavior is unchanged.
     """
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
@@ -1232,7 +1315,12 @@ def fetch_web_source(
     # PDF root URL — mode doesn't apply, just extract it
     if "application/pdf" in content_type:
         print(f"📋 Target type: PDF")
-        return _fetch_pdf_via_selenium(root_url) if use_selenium else _fetch_pdf_via_requests(session, root_url)
+        pages = _fetch_pdf_via_selenium(root_url) if use_selenium else _fetch_pdf_via_requests(session, root_url)
+        if on_batch:
+            if pages:
+                on_batch(pages)
+            return [{"url": p["url"], "content_hash": p.get("content_hash", "")} for p in pages]
+        return pages
 
     print(f"🌐 Target type: HTML (Selenium: {use_selenium})")
 
@@ -1247,7 +1335,7 @@ def fetch_web_source(
             print(f"🗺️  Sitemap mode: {len(sitemap_urls)} URLs to process")
             return _crawl_from_sitemap(
                 session, sitemap_urls, root_url, use_selenium,
-                force_recrawl=force_recrawl,
+                force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
             )
         else:
             # No sitemap found — fall back to BFS crawl with no limit
@@ -1257,7 +1345,7 @@ def fetch_web_source(
                 max_pages=None,
                 use_selenium=use_selenium,
                 robots_rules=robots,
-                force_recrawl=force_recrawl,
+                force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
             )
 
     else:
@@ -1268,7 +1356,7 @@ def fetch_web_source(
             max_pages=max_pages,
             use_selenium=use_selenium,
             robots_rules=robots,
-            force_recrawl=force_recrawl,
+            force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
         )
 
 
@@ -1869,7 +1957,15 @@ def _crawl_html(
     delay: float = 1.0,
     robots_rules: dict | None = None,  # pass in if already fetched
     force_recrawl: bool = False,   # bypass ScrapedURL cache; in-run `visited` dedup still applies
+    on_batch: "Callable[[list[dict]], None] | None" = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[dict]:
+    """
+    on_batch / batch_size: see _crawl_from_sitemap docstring — same
+    batching contract: pages flush every `batch_size` pages instead of
+    accumulating for the whole crawl, and mark_scraped is deferred to the
+    caller in that mode.
+    """
     try:
         from bs4 import BeautifulSoup
     except ImportError:
@@ -1886,6 +1982,7 @@ def _crawl_html(
     queued:  set[str]                    = set()   # URLs in queue but not yet visited
     queue:   list[tuple[str, str|None]]  = [(root_url, None)]
     results: list[dict]                  = []
+    page_meta: list[dict]                = []   # lightweight {url, content_hash} — populated on each flush
 
     driver             = _make_selenium_driver() if use_selenium else None
     pages_fetched      = 0
@@ -2021,6 +2118,7 @@ def _crawl_html(
                         except Exception as exc2:
                             logger.warning(f"Selenium fallback failed {url}: {exc2}")
                         if not html_source:
+                            _maybe_flush(results, on_batch, batch_size, page_meta)
                             continue
 
                     else:
@@ -2034,10 +2132,12 @@ def _crawl_html(
                                 page_hash = pdf_pages[0]["content_hash"]
                             pages_fetched += 1
                             _human_delay_between_pages(pages_fetched, crawl_delay)
-                            try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                            except Exception:
-                                pass
+                            if not on_batch:
+                                try:
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                except Exception:
+                                    pass
+                            _maybe_flush(results, on_batch, batch_size, page_meta)
                             continue
 
                         if any(x in ct for x in [
@@ -2050,10 +2150,12 @@ def _crawl_html(
                                 page_hash = docx_pages[0]["content_hash"]
                             pages_fetched += 1
                             _human_delay_between_pages(pages_fetched, crawl_delay)
-                            try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                            except Exception:
-                                pass
+                            if not on_batch:
+                                try:
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                except Exception:
+                                    pass
+                            _maybe_flush(results, on_batch, batch_size, page_meta)
                             continue
 
                         if "text/csv" in ct or urlparse(url).path.lower().endswith(".csv"):
@@ -2063,10 +2165,12 @@ def _crawl_html(
                                 page_hash = csv_pages[0]["content_hash"]
                             pages_fetched += 1
                             _human_delay_between_pages(pages_fetched, crawl_delay)
-                            try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
-                            except Exception:
-                                pass
+                            if not on_batch:
+                                try:
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                except Exception:
+                                    pass
+                            _maybe_flush(results, on_batch, batch_size, page_meta)
                             continue
 
                         if "text/html" not in ct:
@@ -2104,7 +2208,7 @@ def _crawl_html(
             # if another page links to it directly.
             visited.add(final_url)
             queued.discard(final_url)
-            if page_hash:
+            if page_hash and not on_batch:
                 try:
                     ScrapedURL.mark_scraped(final_url, content_hash=page_hash)
                     if final_url != url:
@@ -2125,12 +2229,14 @@ def _crawl_html(
 
             # ── Inter-page delay (respects Crawl-delay) ───────────────────
             _human_delay_between_pages(pages_fetched, crawl_delay)
+            _maybe_flush(results, on_batch, batch_size, page_meta)
 
     finally:
         if driver:
             print("🔌 Closing Selenium session.")
             driver.quit()
 
-    print(f"✅ Crawl complete. {len(results)} pages from {root_url} ({pages_fetched} URLs fetched)")
-    logger.info(f"Crawled {len(results)} pages from {root_url}")
-    return results
+    _maybe_flush(results, on_batch, batch_size, page_meta, force=True)
+    print(f"✅ Crawl complete. {pages_fetched} URLs fetched from {root_url}")
+    logger.info(f"Crawled {pages_fetched} URLs from {root_url}")
+    return page_meta if on_batch else results

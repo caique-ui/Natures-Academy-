@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import re
 import threading
 import time
@@ -10,10 +11,13 @@ import faiss
 import numpy as np
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from openai import OpenAI
 
 from .models import DocumentChunk, IndexVersion, SourceDocument
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -175,6 +179,19 @@ class DBVectorStore:
         if self._pending_version is None:
             raise RuntimeError("Call begin_version() before add_texts()")
 
+        # Postgres text/varchar columns reject NUL (0x00) bytes outright —
+        # bulk_create() raises ValueError for the *whole* batch if even one
+        # chunk contains one (seen in practice from a handful of scraped
+        # pages/PDFs with embedded nulls). Strip them here, once, before
+        # anything else touches the text — protects both this call's
+        # embedding step and every downstream DB write, for both the web
+        # scraper and Drive sync paths that share this method.
+        texts = [t.replace("\x00", "") if t else t for t in texts]
+        for meta in metadatas:
+            for key in ("source_id", "source_name", "mime", "source_url", "parent_url"):
+                if meta.get(key):
+                    meta[key] = meta[key].replace("\x00", "")
+
         print(f"Embedding {len(texts)} chunks...")
 
         # Clean for embedding only; originals stored for display
@@ -194,16 +211,24 @@ class DBVectorStore:
                 "embedding":       vec,       # from cleaned text
             })
 
-    def save(self, activate: bool = True):
+    def _write_pending_chunks_to_db(self):
         """
-        Bulk-write all staged chunks to the database.
-        If activate=True, marks this version as the active one for its folder.
+        Bulk-write currently staged chunks to the database and clear the
+        staging buffer. Does NOT mark the version COMPLETED or activate it —
+        that's finalize()'s job. Safe to call repeatedly during a long
+        ingestion (e.g. once per crawl batch) to keep memory bounded;
+        each call only holds one batch's worth of chunks/embeddings at a time.
+
+        Increments version.files_processed / chunks_indexed cumulatively so
+        counts stay correct across multiple calls.
         """
         if self._pending_version is None:
             raise RuntimeError("Nothing to save – call begin_version() first.")
 
         version = self._pending_version
         chunks  = self._pending_chunks
+        if not chunks:
+            return
 
         print(f"Writing {len(chunks)} chunks to database for version v{version.version_number}…")
 
@@ -248,6 +273,19 @@ class DBVectorStore:
                 if fid not in parent_url_map:
                     parent_url_map[fid] = c.get("parent_url")
 
+            # A parent page may have been persisted in an *earlier* batch
+            # (not present in this batch's docs_map) — look those up in the DB
+            # too, so cross-batch parent/child links still resolve correctly.
+            missing_parent_urls = {
+                url for url in parent_url_map.values()
+                if url and url not in url_to_doc
+            }
+            if missing_parent_urls:
+                existing_parents = SourceDocument.objects.filter(
+                    version=version, source_url__in=missing_parent_urls,
+                )
+                url_to_doc.update({d.source_url: d for d in existing_parents})
+
             for fid, parent_url in parent_url_map.items():
                 if not parent_url:
                     continue  # root page or Drive doc — leave parent=None
@@ -283,22 +321,60 @@ class DBVectorStore:
                 doc.chunk_count = doc_chunk_counts[fid]
                 doc.save(update_fields=["chunk_count"])
 
-            version.status          = IndexVersion.Status.COMPLETED
-            version.files_processed = len(docs_map)
-            version.chunks_indexed  = len(chunks)
-            version.completed_at    = timezone.now()
-            version.save()
+            # Cumulative counts — safe across multiple batch flushes.
+            version.files_processed = F("files_processed") + len(docs_map)
+            version.chunks_indexed  = F("chunks_indexed") + len(chunks)
+            version.save(update_fields=["files_processed", "chunks_indexed"])
+            version.refresh_from_db(fields=["files_processed", "chunks_indexed"])
 
-            if activate:
-                version.activate()
-
-        print(f"✅ Saved version v{version.version_number}: "
-              f"{version.files_processed} docs, {version.chunks_indexed} chunks.")
+        print(f"  ↳ Batch written: {len(docs_map)} docs, {len(chunks)} chunks "
+              f"(running total: {version.files_processed} docs, {version.chunks_indexed} chunks).")
 
         self._pending_chunks = []
         # Invalidate FAISS cache so next search reloads from DB
         self._faiss_index = None
         self._faiss_loaded_cache_key = None
+
+    def write_pending_batch(self):
+        """
+        Public alias for flushing the currently staged chunks mid-ingestion,
+        without finalizing the version. Call this periodically (e.g. once
+        per crawl batch) to keep memory bounded on large sources. Call
+        finalize() once at the very end to mark the version COMPLETED.
+        """
+        self._write_pending_chunks_to_db()
+
+    def finalize(self, activate: bool = True):
+        """
+        Flush any remaining staged chunks, then mark the version COMPLETED
+        (and activate it if requested). Call this once, after all batches
+        (if any) have been processed via write_pending_batch()/add_texts().
+        """
+        if self._pending_version is None:
+            raise RuntimeError("Nothing to finalize – call begin_version() first.")
+
+        self._write_pending_chunks_to_db()  # flush anything not yet written
+
+        version = self._pending_version
+        with transaction.atomic():
+            version.status       = IndexVersion.Status.COMPLETED
+            version.completed_at = timezone.now()
+            version.save(update_fields=["status", "completed_at"])
+
+            if activate:
+                version.activate()
+
+        print(f"✅ Finalized version v{version.version_number}: "
+              f"{version.files_processed} docs, {version.chunks_indexed} chunks.")
+
+    def save(self, activate: bool = True):
+        """
+        Bulk-write all staged chunks to the database and finalize the version.
+        Equivalent to finalize(activate=activate) — kept as the original
+        single-call entry point for callers that don't need mid-ingestion
+        batching (e.g. Drive sync, which stages everything then saves once).
+        """
+        self.finalize(activate=activate)
 
     def mark_failed(self, error: str):
         """Mark the current pending version as failed."""

@@ -323,8 +323,19 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
     Fan-out mode (root_url is None):
         Dispatches one sub-task per URL in settings.SCRAPING_URLS.
         Used for manual triggering outside the nightly orchestrator.
+
+    Large-site handling (e.g. 15,000+ page sitemaps):
+        Pages are streamed from the crawler in batches (settings.SCRAPE_BATCH_SIZE,
+        default 100) and embedded+persisted to the DB as they arrive, instead of
+        holding the entire site's text + embeddings in memory until the end.
+        Each page is only marked scraped (ScrapedURL) *after* its batch is
+        actually written to the DB — so a crash mid-crawl can't leave pages
+        falsely marked "already scraped" with nothing actually persisted.
+        Per-page content-hash comparison against ScrapedURL means unchanged
+        pages are skipped (no re-embedding cost) without needing a whole-site
+        fingerprint gate up front.
     """
-    from ragbot.models import WebSyncState, NightlyBundle
+    from ragbot.models import WebSyncState, NightlyBundle, ScrapedURL
     from ragbot.web_scraper import fetch_web_source, compute_web_fingerprint
     from ragbot.vectorstore_db import DBVectorStore, invalidate_db_store_cache
     from ragbot.textsplit import chunk_text
@@ -363,80 +374,127 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
         except NightlyBundle.DoesNotExist:
             logger.warning(f"[{fid}] bundle_id={bundle_id} not found — proceeding without bundle.")
 
-    # ── Scrape ────────────────────────────────────────────────────────────
-    logger.info(f"[{fid}] Starting web scrape: {root_url}")
-    try:
-        scrape_mode = mode or getattr(settings, "SCRAPING_MODE", "sitemap")
-        logger.info(f"[{fid}] Scrape mode: {scrape_mode}")
-        pages = fetch_web_source(root_url, mode=scrape_mode, force_recrawl=True)
-    except Exception as exc:
-        logger.error(f"[{fid}] Scrape failed: {exc}", exc_info=True)
-        raise self.retry(exc=exc)
-
-    if not pages:
-        logger.warning(f"[{fid}] No pages scraped from {root_url}")
-        WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
-        return {"status": "no_pages"}
-
-    new_fingerprint = compute_web_fingerprint(pages)
-
-    # ── Skip if nothing changed ───────────────────────────────────────────
-    if new_fingerprint == sync.content_fingerprint:
-        logger.info(f"[{fid}] Fingerprint unchanged — skipping index.")
-        WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
-        return {"status": "skipped", "reason": "fingerprint_unchanged"}
-
     # ── Acquire lock ──────────────────────────────────────────────────────
+    # Held for the ENTIRE crawl now (not just the final indexing step), since
+    # pages are embedded+persisted incrementally as they're crawled rather
+    # than all at once at the end. refresh_index_lock() is heartbeated once
+    # per batch below so a long crawl (many hours for 15,000+ pages) doesn't
+    # get treated as stale and picked up by a second worker.
     if not sync.acquire_index_lock():
         logger.info(f"[{fid}] Another worker holds the lock — exiting.")
         return {"status": "skipped", "reason": "lock_busy"}
 
-    # ── Index ─────────────────────────────────────────────────────────────
+    chunk_max_chars = getattr(settings, "CHUNK_MAX_CHARS", 1500)
+    chunk_overlap   = getattr(settings, "CHUNK_OVERLAP", 150)
+    batch_size      = getattr(settings, "SCRAPE_BATCH_SIZE", 100)
+    force_recrawl   = getattr(settings, "SCRAPING_FORCE_RECRAWL", False)
+
     store = DBVectorStore(
         folder_id=fid,
         embed_model=settings.OPENAI_EMBED_MODEL,
-        chunk_max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
-        chunk_overlap=getattr(settings, "CHUNK_OVERLAP", 150),
+        chunk_max_chars=chunk_max_chars,
+        chunk_overlap=chunk_overlap,
     )
+
+    added             = 0   # pages actually (re-)embedded this run
+    skipped_empty     = 0   # pages with no extractable text
+    skipped_unchanged = 0   # pages whose content_hash matches last scrape
 
     try:
         version = store.begin_version(folder_name=sync.label or root_url)
-        added = skipped = 0
 
-        for page in pages:
-            text = page["text"]
-            if not text.strip():
-                skipped += 1
-                continue
+        def handle_batch(batch_pages: list[dict]) -> None:
+            nonlocal added, skipped_empty, skipped_unchanged
 
-            chunks    = chunk_text(text, max_chars=getattr(settings, "CHUNK_MAX_CHARS", 1500),
-                                   overlap=getattr(settings, "CHUNK_OVERLAP", 150))
-            metadatas = [
-                {
-                    "source_id":   page["url"],
-                    "source_name": page["title"],
-                    "mime":        "text/html",
-                    "source_url":  page["url"],
-                    "source_type": "web",
-                    "parent_url":  page.get("parent_url"),   # parent/child tracking
-                    "chunk":       i,
-                    "text":        c,
-                }
-                for i, c in enumerate(chunks)
-            ]
-            store.add_texts(chunks, metadatas)
-            added += 1
+            # One batched lookup instead of one query per page.
+            urls_in_batch   = [p["url"] for p in batch_pages]
+            existing_hashes = dict(
+                ScrapedURL.objects.filter(url__in=urls_in_batch)
+                                  .values_list("url", "content_hash")
+            )
+
+            scraped_this_batch = []  # pages to mark_scraped AFTER the DB write below succeeds
+            for page in batch_pages:
+                text = page.get("text", "")
+                if not text.strip():
+                    skipped_empty += 1
+                    continue
+
+                content_hash = page.get("content_hash", "")
+                if (not force_recrawl and content_hash
+                        and existing_hashes.get(page["url"]) == content_hash):
+                    # Unchanged since last scrape — skip re-embedding, but still
+                    # refresh its ScrapedURL row so the 24h cache stays accurate.
+                    skipped_unchanged += 1
+                    scraped_this_batch.append(page)
+                    continue
+
+                chunks    = chunk_text(text, max_chars=chunk_max_chars, overlap=chunk_overlap)
+                metadatas = [
+                    {
+                        "source_id":   page["url"],
+                        "source_name": page.get("title", page["url"]),
+                        "mime":        "text/html",
+                        "source_url":  page["url"],
+                        "source_type": "web",
+                        "parent_url":  page.get("parent_url"),   # parent/child tracking
+                        "chunk":       i,
+                        "text":        c,
+                    }
+                    for i, c in enumerate(chunks)
+                ]
+                store.add_texts(chunks, metadatas)
+                added += 1
+                scraped_this_batch.append(page)
+
+            # Persist this batch now — keeps memory bounded regardless of
+            # total site size (15,000+ pages no longer held in memory at once).
+            store.write_pending_batch()
             gc.collect()
 
-        if not store._pending_chunks:
-            store.mark_failed("No chunks produced")
-            raise ValueError("No text extracted from any page.")
+            # Only mark URLs scraped AFTER the write above succeeded — if it
+            # raised, we never reach here, so a mid-crawl crash can't leave a
+            # page falsely marked "scraped" with nothing actually persisted.
+            for page in scraped_this_batch:
+                try:
+                    ScrapedURL.mark_scraped(page["url"], content_hash=page.get("content_hash", ""))
+                except Exception:
+                    pass
+
+            sync.refresh_index_lock()
+
+        scrape_mode = mode or getattr(settings, "SCRAPING_MODE", "sitemap")
+        logger.info(f"[{fid}] Starting web scrape: {root_url} (mode={scrape_mode})")
+        page_meta = fetch_web_source(
+            root_url, mode=scrape_mode, force_recrawl=force_recrawl,
+            on_batch=handle_batch, batch_size=batch_size,
+        )
+
+        if not page_meta:
+            logger.warning(f"[{fid}] No pages scraped from {root_url}")
+            store.mark_failed("No pages scraped")
+            if bundle is not None:
+                bundle.versions.add(version)
+            WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
+            return {"status": "no_pages"}
+
+        if added == 0:
+            # Real crawl completed, but every page was unchanged (or empty) —
+            # nothing new to index. Don't activate an empty version over the
+            # perfectly good, already-active one from a previous run.
+            logger.info(
+                f"[{fid}] No changed pages to index — {skipped_unchanged} unchanged, "
+                f"{skipped_empty} empty. Leaving existing active version in place."
+            )
+            version.delete()  # discard the unused RUNNING version row
+            WebSyncState.objects.filter(pk=sync.pk).update(last_checked_at=timezone.now())
+            return {"status": "skipped", "reason": "no_changed_pages"}
 
         # activate=True only when running outside the bundle (manual/one-off).
         # Inside the bundle, activation is handled by nightly_activate_bundle_task
         # after ALL domains finish — so individual versions are NOT activated here.
         activate_now = bundle is None
-        store.save(activate=activate_now)
+        store.finalize(activate=activate_now)
         invalidate_db_store_cache(fid)
 
         # ── Register version with bundle ──────────────────────────────────
@@ -444,6 +502,7 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
             bundle.versions.add(version)
             logger.info(f"[{fid}] Registered v{version.version_number} with bundle {bundle.date}.")
 
+        new_fingerprint = compute_web_fingerprint(page_meta)
         WebSyncState.objects.filter(pk=sync.pk).update(
             content_fingerprint=new_fingerprint,
             last_checked_at=timezone.now(),
@@ -452,7 +511,8 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
 
         logger.info(
             f"[{fid}] ✅ Web index v{version.version_number} complete. "
-            f"{added} pages, {version.chunks_indexed} chunks."
+            f"{added} pages embedded, {skipped_unchanged} unchanged, "
+            f"{skipped_empty} empty, {version.chunks_indexed} chunks."
         )
         return {
             "status":  "indexed",
@@ -464,8 +524,8 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
     except Exception as exc:
         store.mark_failed(str(exc))
         # Register failed version with bundle too so orchestrator can track it
-        if bundle is not None and store._version:
-            bundle.versions.add(store._version)
+        if bundle is not None and store._pending_version:
+            bundle.versions.add(store._pending_version)
         logger.error(f"[{fid}] Web indexing failed: {exc}", exc_info=True)
         raise self.retry(exc=exc)
 

@@ -392,7 +392,27 @@ class WebSyncState(models.Model):
             is_indexing=False,
             indexing_started_at=None,
         )
-        self.is_indexing = False    
+        self.is_indexing = False
+
+    def refresh_index_lock(self) -> bool:
+        """
+        Heartbeat call — refreshes indexing_started_at so a long-running
+        crawl (e.g. a 15,000+ page sitemap, potentially many hours) doesn't
+        get treated as stale mid-run by acquire_index_lock()'s staleness
+        check. Call this periodically (e.g. once per successfully-persisted
+        batch) while the lock is held, so staleness is measured from the
+        last actual progress rather than from task start.
+
+        Returns True if the refresh took effect (this row still shows
+        is_indexing=True), False otherwise. Note: this is a best-effort
+        heartbeat, not a fenced/tokenized lock — it can't distinguish "my"
+        hold from another worker's if one has already reclaimed a lock this
+        instance believed it still held.
+        """
+        updated = WebSyncState.objects.filter(pk=self.pk, is_indexing=True).update(
+            indexing_started_at=timezone.now()
+        )
+        return updated > 0
 
 class Folder(models.Model):
     """
