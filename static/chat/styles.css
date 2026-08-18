@@ -1581,3 +1581,49 @@ button{
 
 a { color: #4f46e5; }
 a:hover { text-decoration: underline; }
+
+
+
+/* Add to styles.css — clickable source cards under assistant messages */
+
+.source-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.source-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #eef4ee;
+  color: #3a6b3a;
+  text-decoration: none;
+  border: 1px solid #d7e5d7;
+  transition: background 0.15s ease;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-card:hover {
+  background: #dfeadf;
+}
+
+.source-card i {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.source-card--nolink {
+  color: #888;
+  background: #f2f2f2;
+  border-color: #e2e2e2;
+  cursor: default;
+}

@@ -89,16 +89,79 @@ $(function () {
 
   function removeEmptyState() { $('#empty-state').remove(); }
 
-  function addBubble(role, html) {
+  // Matches (in priority order, single pass so we never re-scan text we've
+  // already wrapped in a tag): URLs, emails, then phone-like number groups.
+  // Phone matching is heuristic — requires 8-12 total digits across at
+  // least two grouped chunks, so plain numbers in prose ("600 hours",
+  // "2026") don't get wrongly linked.
+  const LINKIFY_RE = new RegExp(
+    '(https?://[^\\s<]+[^\\s<.,:;"\')\\]])' +
+    '|([\\w.+-]+@[\\w-]+\\.[\\w.-]+)' +
+    '|(\\+?\\d{1,3}?[-.\\s]?\\(?\\d{2,4}\\)?[-.\\s]?\\d{3,4}[-.\\s]?\\d{3,4}(?:[-.\\s]?\\d{2,4})?)',
+    'g'
+  );
+
+  function linkify(escapedText) {
+    return escapedText.replace(LINKIFY_RE, function (match, url, email, phone) {
+      if (url) {
+        return `<a href="${url}" target="_blank" rel="noopener">${url}</a>`;
+      }
+      if (email) {
+        return `<a href="mailto:${email}">${email}</a>`;
+      }
+      if (phone) {
+        const digitCount = (phone.match(/\d/g) || []).length;
+        if (digitCount < 8 || digitCount > 12) return match; // not phone-like enough
+        const dial = phone.replace(/[^\d+]/g, '');
+        return `<a href="tel:${dial}">${phone}</a>`;
+      }
+      return match;
+    });
+  }
+
+  // Full pipeline for assistant message text: escape HTML, auto-link
+  // URLs/emails/phone numbers, then convert newlines to <br>.
+  function formatAssistantContent(text) {
+    return linkify(escHtml(text || '')).replace(/\n/g, '<br>');
+  }
+
+  function addBubble(role, html, sourcesHtml) {
     const label = role === 'user' ? 'You' : 'Assistant';
     const cls   = role === 'user' ? 'user' : 'bot';
     const $b = $(`<div class="bubble ${cls}">
       <div class="role">${label}</div>
       <div class="content">${html}</div>
+      ${sourcesHtml || ''}
     </div>`);
     $msgContainer.append($b);
     scrollToBottom();
     return $b;
+  }
+
+  // Build clickable source-card HTML from a `sources` array
+  // (each item: {source_name, source_url, chunk_pk, score}).
+  // Dedupes by source_url (falling back to source_name) since several
+  // retrieved chunks often come from the same document.
+  function renderSourceCards(sources) {
+    if (!sources || !sources.length) return '';
+    const seen  = new Set();
+    const cards = [];
+    sources.forEach(function (s) {
+      const key = s.source_url || s.source_name;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      const name = escHtml(s.source_name || 'Source');
+      if (s.source_url) {
+        const url = escHtml(s.source_url);
+        cards.push(
+          `<a class="source-card" href="${url}" target="_blank" rel="noopener" title="${url}">` +
+          `<i class="fa-solid fa-arrow-up-right-from-square"></i> ${name}</a>`
+        );
+      } else {
+        cards.push(`<span class="source-card source-card--nolink">${name}</span>`);
+      }
+    });
+    return cards.length ? `<div class="source-cards">${cards.join('')}</div>` : '';
   }
 
   /* ─────────────────────────────────────────────────────────────
@@ -187,8 +250,11 @@ $(function () {
         $.each(data.messages, function (_, m) {
           const html = m.role === 'user'
             ? escHtml(m.content)
-            : m.content.replace(/\n/g, '<br>');
-          addBubble(m.role, html);
+            : formatAssistantContent(m.content);
+          const sourcesHtml = m.role === 'assistant'
+            ? renderSourceCards(m.source_chunks)
+            : '';
+          addBubble(m.role, html, sourcesHtml);
         });
       }
       setActiveConv(id);
@@ -552,6 +618,7 @@ $(function () {
     const decoder    = new TextDecoder();
     const $botBubble = addBubble('bot', '');
     const $content   = $botBubble.find('.content');
+    let   rawText    = '';
 
     return reader.read().then(function pump({ done, value }) {
       if (done) { setLoading(false); hideStatus(); return; }
@@ -561,7 +628,16 @@ $(function () {
           const ev = JSON.parse(line.slice(6));
           if      (ev.type === 'status')         showStatus(ev.message);
           else if (ev.type === 'clear_status')   hideStatus();
-          else if (ev.type === 'content')      { $content.html($content.html() + ev.content.replace(/\n/g, '<br>')); scrollToBottom(); }
+          else if (ev.type === 'content')      {
+            // Live preview during streaming: HTML-escaped only (no
+            // linkification yet — a URL/phone number can arrive split
+            // across two chunks, and linkifying a half-URL would either
+            // miss it or produce a broken link). Full linkify pass runs
+            // once on the complete text when the 'done' event arrives.
+            rawText += ev.content;
+            $content.html(escHtml(rawText).replace(/\n/g, '<br>'));
+            scrollToBottom();
+          }
           else if (ev.type === 'conversation_meta') {
             currentConvId   = ev.conversation_id;
             pendingFolderId = null;
@@ -582,7 +658,13 @@ $(function () {
             }
             history.replaceState({}, '', `/?conv=${ev.conversation_id}`);
           }
-          else if (ev.type === 'done')  { hideStatus(); setLoading(false); }
+          else if (ev.type === 'done')  {
+            hideStatus();
+            setLoading(false);
+            $content.html(formatAssistantContent(rawText));
+            const sourcesHtml = renderSourceCards(ev.sources);
+            if (sourcesHtml) $botBubble.append(sourcesHtml);
+          }
           else if (ev.type === 'error') { hideStatus(); $content.html('<em>Error. Please try again.</em>'); setLoading(false); }
         } catch (_) {}
       });
@@ -603,7 +685,7 @@ $(function () {
     });
 
     if (data.success) {
-      addBubble('bot', data.assistant_message.replace(/\n/g, '<br>'));
+      addBubble('bot', formatAssistantContent(data.assistant_message));
       currentConvId   = data.conversation_id;
       pendingFolderId = null;
       upsertUnfiledConv(data.conversation_id, data.conversation_title);

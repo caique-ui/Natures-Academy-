@@ -25,6 +25,19 @@
           <div class="bubble {% if m.role == 'user' %}user{% else %}bot{% endif %}">
             <div class="role">{% if m.role == 'user' %}You{% else %}Assistant{% endif %}</div>
             <div class="content">{{ m.content|linebreaksbr }}</div>
+            {% if m.sources %}
+              <div class="source-cards">
+                {% for s in m.sources %}
+                  {% if s.source_url %}
+                    <a class="source-card" href="{{ s.source_url }}" target="_blank" rel="noopener" title="{{ s.source_url }}">
+                      <i class="fa-solid fa-arrow-up-right-from-square"></i> {{ s.source_name|default:"Source" }}
+                    </a>
+                  {% else %}
+                    <span class="source-card source-card--nolink">{{ s.source_name|default:"Source" }}</span>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
         {% endfor %}
       {% else %}

@@ -679,6 +679,7 @@ def _crawl_from_sitemap(
     force_recrawl: bool = False,
     on_batch: "Callable[[list[dict]], None] | None" = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    version=None,
 ) -> list[dict]:
     """
     Fetch and extract content from a pre-built list of URLs (from sitemap).
@@ -705,6 +706,11 @@ def _crawl_from_sitemap(
         When omitted (default), behavior is unchanged: pages accumulate in
         `results`, mark_scraped fires inline as before, and the full list
         is returned at the end.
+
+    version:
+        The IndexVersion this crawl belongs to. Passed through to every
+        inline ScrapedURL.mark_scraped() call (ignored when on_batch is
+        set, since that mode defers mark_scraped to the caller).
     """
     try:
         from bs4 import BeautifulSoup
@@ -786,6 +792,7 @@ def _crawl_from_sitemap(
                             session, driver, visited, results,
                             force_recrawl=force_recrawl,
                             defer_mark_scraped=bool(on_batch),
+                            version=version,
                         )
                     pages_fetched      += 1
                     session_page_count += 1
@@ -828,6 +835,7 @@ def _crawl_from_sitemap(
                                     session, driver, visited, results,
                                     force_recrawl=force_recrawl,
                                     defer_mark_scraped=bool(on_batch),
+                                    version=version,
                                 )
                             pages_fetched      += 1
                             session_page_count += 1
@@ -854,7 +862,7 @@ def _crawl_from_sitemap(
                         _human_delay_between_pages(pages_fetched, crawl_delay)
                         if not on_batch:
                             try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                             except Exception:
                                 pass
                         _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -872,7 +880,7 @@ def _crawl_from_sitemap(
                         _human_delay_between_pages(pages_fetched, crawl_delay)
                         if not on_batch:
                             try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                             except Exception:
                                 pass
                         _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -887,7 +895,7 @@ def _crawl_from_sitemap(
                         _human_delay_between_pages(pages_fetched, crawl_delay)
                         if not on_batch:
                             try:
-                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                             except Exception:
                                 pass
                         _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -913,6 +921,7 @@ def _crawl_from_sitemap(
                             session, driver, visited, results,
                             force_recrawl=force_recrawl,
                             defer_mark_scraped=bool(on_batch),
+                            version=version,
                         )
                     pages_fetched += 1
 
@@ -924,9 +933,9 @@ def _crawl_from_sitemap(
             # the caller, after it confirms the batch was actually persisted)
             if page_hash and not on_batch:
                 try:
-                    ScrapedURL.mark_scraped(final_url, content_hash=page_hash)
+                    ScrapedURL.mark_scraped(final_url, content_hash=page_hash, version=version)
                     if final_url != url:
-                        ScrapedURL.mark_scraped(url, content_hash=page_hash)
+                        ScrapedURL.mark_scraped(url, content_hash=page_hash, version=version)
                 except Exception:
                     pass
 
@@ -1043,6 +1052,7 @@ def _discover_and_extract_attachments(
     results: list,
     force_recrawl: bool = False,
     defer_mark_scraped: bool = False,
+    version=None,
 ) -> None:
     """
     Find and fetch any attachment links on a sitemap-crawled HTML page.
@@ -1057,6 +1067,11 @@ def _discover_and_extract_attachments(
         Pass True when the caller is batching (on_batch is set) — skips the
         inline mark_scraped call here, since the caller will mark these URLs
         scraped itself only after it confirms the batch was persisted.
+
+    version:
+        The IndexVersion this crawl belongs to. Passed through to the
+        inline ScrapedURL.mark_scraped() call below (ignored when
+        defer_mark_scraped is True).
     """
     if not soup:
         return
@@ -1082,7 +1097,7 @@ def _discover_and_extract_attachments(
 
         if pages and not defer_mark_scraped:
             try:
-                ScrapedURL.mark_scraped(att_url, content_hash=pages[0]["content_hash"])
+                ScrapedURL.mark_scraped(att_url, content_hash=pages[0]["content_hash"], version=version)
             except Exception:
                 pass
 
@@ -1270,6 +1285,7 @@ def fetch_web_source(
     force_recrawl: bool = False,
     on_batch: "Callable[[list[dict]], None] | None" = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    version=None,
 ) -> list[dict]:
     """
     Main entry point for scraping a web source.
@@ -1305,6 +1321,13 @@ def fetch_web_source(
         is a lightweight list of {"url", "content_hash"} dicts (no page
         text) suitable for compute_web_fingerprint(), not the full pages.
         When omitted (default), behavior is unchanged.
+
+    version:
+        The IndexVersion this crawl belongs to. Only used in inline mode
+        (on_batch=None) — passed straight through to every inline
+        ScrapedURL.mark_scraped() call so ScrapedURL.source_version is
+        populated instead of left NULL. Ignored when on_batch is set, since
+        that mode defers mark_scraped entirely to the caller.
     """
     session = requests.Session()
     session.headers.update(REQUEST_HEADERS)
@@ -1336,6 +1359,7 @@ def fetch_web_source(
             return _crawl_from_sitemap(
                 session, sitemap_urls, root_url, use_selenium,
                 force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
+                version=version,
             )
         else:
             # No sitemap found — fall back to BFS crawl with no limit
@@ -1346,6 +1370,7 @@ def fetch_web_source(
                 use_selenium=use_selenium,
                 robots_rules=robots,
                 force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
+                version=version,
             )
 
     else:
@@ -1357,6 +1382,7 @@ def fetch_web_source(
             use_selenium=use_selenium,
             robots_rules=robots,
             force_recrawl=force_recrawl, on_batch=on_batch, batch_size=batch_size,
+            version=version,
         )
 
 
@@ -1959,12 +1985,18 @@ def _crawl_html(
     force_recrawl: bool = False,   # bypass ScrapedURL cache; in-run `visited` dedup still applies
     on_batch: "Callable[[list[dict]], None] | None" = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    version=None,
 ) -> list[dict]:
     """
     on_batch / batch_size: see _crawl_from_sitemap docstring — same
     batching contract: pages flush every `batch_size` pages instead of
     accumulating for the whole crawl, and mark_scraped is deferred to the
     caller in that mode.
+
+    version:
+        The IndexVersion this crawl belongs to. Passed through to every
+        inline ScrapedURL.mark_scraped() call (ignored when on_batch is
+        set, since that mode defers mark_scraped to the caller).
     """
     try:
         from bs4 import BeautifulSoup
@@ -2134,7 +2166,7 @@ def _crawl_html(
                             _human_delay_between_pages(pages_fetched, crawl_delay)
                             if not on_batch:
                                 try:
-                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                                 except Exception:
                                     pass
                             _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -2152,7 +2184,7 @@ def _crawl_html(
                             _human_delay_between_pages(pages_fetched, crawl_delay)
                             if not on_batch:
                                 try:
-                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                                 except Exception:
                                     pass
                             _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -2167,7 +2199,7 @@ def _crawl_html(
                             _human_delay_between_pages(pages_fetched, crawl_delay)
                             if not on_batch:
                                 try:
-                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "")
+                                    ScrapedURL.mark_scraped(url, content_hash=page_hash or "", version=version)
                                 except Exception:
                                     pass
                             _maybe_flush(results, on_batch, batch_size, page_meta)
@@ -2210,9 +2242,9 @@ def _crawl_html(
             queued.discard(final_url)
             if page_hash and not on_batch:
                 try:
-                    ScrapedURL.mark_scraped(final_url, content_hash=page_hash)
+                    ScrapedURL.mark_scraped(final_url, content_hash=page_hash, version=version)
                     if final_url != url:
-                        ScrapedURL.mark_scraped(url, content_hash=page_hash)
+                        ScrapedURL.mark_scraped(url, content_hash=page_hash, version=version)
                 except Exception:
                     pass
 

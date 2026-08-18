@@ -270,7 +270,7 @@ def multi_query_retrieve(
 
     seen_pks: set[int] = set()
     merged: list[tuple] = []
-
+    print("All queries for multi-query retrieval:", all_queries)  #############################################
     for q in all_queries:
         for score, meta in store.search(q, k=k_per_query):
             pk = meta.get("chunk_pk")
@@ -378,7 +378,9 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         yield _event({"type": "status", "message": "Searching documents..."})
         store     = get_db_store()
         retrieved = multi_query_retrieve(standalone_query, store)
-        
+        print("***********************")
+        print(store, retrieved)
+        print("======================")
         yield _event({"type": "status", "message": "Building context..."})
         context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
         if history:

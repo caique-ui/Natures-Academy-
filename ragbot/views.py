@@ -112,6 +112,23 @@ def _conv_dict(c: Conversation) -> dict:
     }
 
 
+def _dedupe_sources(source_chunks: list) -> list:
+    """
+    Collapse retrieved-chunk sources down to one entry per document,
+    keyed on source_url (falling back to source_name) — several chunks
+    often come from the same document.
+    """
+    seen: set = set()
+    out: list = []
+    for c in source_chunks or []:
+        key = c.get("source_url") or c.get("source_name")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
 def _owns_conversation(request, conv: Conversation) -> bool:
     session_key = request.session.session_key or ""
     if conv.user:
@@ -144,6 +161,12 @@ def chat_view(request):
                 active_messages = list(conv.messages.order_by("created_at").values(
                     "role", "content", "source_chunks"
                 ))
+                for m in active_messages:
+                    m["sources"] = (
+                        _dedupe_sources(m.get("source_chunks"))
+                        if m["role"] == Message.ROLE_ASSISTANT
+                        else []
+                    )
             else:
                 active_conv_id = None
         except Conversation.DoesNotExist:

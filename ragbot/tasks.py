@@ -457,7 +457,11 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
             # page falsely marked "scraped" with nothing actually persisted.
             for page in scraped_this_batch:
                 try:
-                    ScrapedURL.mark_scraped(page["url"], content_hash=page.get("content_hash", ""))
+                    ScrapedURL.mark_scraped(
+                        page["url"],
+                        content_hash=page.get("content_hash", ""),
+                        version=version,
+                    )
                 except Exception:
                     pass
 
@@ -467,7 +471,7 @@ def scrape_web_source_task(self, root_url: str = None, bundle_id: int = None, mo
         logger.info(f"[{fid}] Starting web scrape: {root_url} (mode={scrape_mode})")
         page_meta = fetch_web_source(
             root_url, mode=scrape_mode, force_recrawl=force_recrawl,
-            on_batch=handle_batch, batch_size=batch_size,
+            on_batch=handle_batch, batch_size=batch_size, version=version,
         )
 
         if not page_meta:

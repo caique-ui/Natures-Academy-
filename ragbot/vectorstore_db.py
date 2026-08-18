@@ -77,15 +77,17 @@ def clean_chunk_for_embedding(text: str) -> str:
     return result.strip()
 
 
-def _versions_cache_key(version: Optional[IndexVersion], version_web: Optional[IndexVersion]) -> str:
+def _versions_cache_key(version: Optional[IndexVersion], versions_web: List["IndexVersion"]) -> str:
     """
-    A cache key that changes whenever EITHER the Drive or web version changes.
-    Storing only the Drive version pk (original code) meant a web-only update
-    never triggered a FAISS rebuild.
+    A cache key that changes whenever EITHER the Drive version or ANY active
+    web version changes. Storing only the Drive version pk (original code)
+    meant a web-only update never triggered a FAISS rebuild. Now accepts a
+    list of web versions (one per web source) instead of a single one, since
+    multiple web sources can be active simultaneously.
     """
     drive_pk = version.pk if version else 0
-    web_pk   = version_web.pk if version_web else 0
-    return f"{drive_pk}:{web_pk}"
+    web_pks  = ",".join(str(v.pk) for v in sorted(versions_web, key=lambda v: v.pk))
+    return f"{drive_pk}:{web_pks or 'none'}"
 
 
 # ---------------------------------------------------------------------------
@@ -478,18 +480,28 @@ class DBVectorStore:
             folder_id=self.folder_id, is_active=True
         ).first()
 
-    def _get_target_version_web(self) -> Optional[IndexVersion]:
+    def _get_target_versions_web(self) -> List[IndexVersion]:
         """
-        Find the active web IndexVersion.
+        Find ALL active web IndexVersions — one per scraped web source.
         Web versions are stored with a folder_id starting with 'web:'
-        (e.g. 'web:nsw-regs-0653') — never a Drive folder UUID.
-        Using folder_name=SCRAPING_URL was unreliable because folder_name
-        stores a human label, not the raw URL.
+        (e.g. 'web:nsw-regs-0653') — never a Drive folder UUID. Each web
+        source gets its own IndexVersion row, and IndexVersion.activate()
+        scopes is_active per folder_id — so with N web sources there are
+        legitimately N simultaneously-active web versions. All of them need
+        to be merged into search, not just one.
+
+        Previously this matched on folder_name == settings.SCRAPING_URL — a
+        single leftover URL setting from before multi-source support. That
+        could only ever match one source (if any), so every other web
+        source's chunks were silently excluded from every search.
         """
-        return IndexVersion.objects.filter(
-            folder_name=settings.SCRAPING_URL,
-            is_active=True,
-        ).order_by("-created_at").first()
+        web_prefix = getattr(settings, "WEB_FOLDER_ID", "web:")
+        return list(
+            IndexVersion.objects.filter(
+                folder_id__startswith=web_prefix,
+                is_active=True,
+            ).order_by("-created_at")
+        )
 
     def _search_faiss(
         self,
@@ -498,22 +510,20 @@ class DBVectorStore:
         version_id: Optional[int],
     ) -> List[Tuple[float, Dict]]:
         """Load embeddings into a local FAISS index, then search."""
-        version     = self._get_target_version(version_id)
-        version_web = self._get_target_version_web()
-        #version_web = self._get_target_version(version_id)
-        #version = self._get_target_version_web()
-        if version is None and version_web is None:
+        version      = self._get_target_version(version_id)
+        versions_web = self._get_target_versions_web()
+        if version is None and not versions_web:
             print("No active version found.")
             return []
 
-        cache_key = _versions_cache_key(version, version_web)
+        cache_key = _versions_cache_key(version, versions_web)
         
         with self._lock:
             # FIX: previously compared only the Drive version pk, so a
             # web-only update never triggered a FAISS rebuild.  Now we use a
-            # combined "drive_pk:web_pk" key so either change forces a reload.
+            # combined "drive_pk:web_pks" key so any change forces a reload.
             if self._faiss_loaded_cache_key != cache_key:
-                versions_to_load = [v for v in [version, version_web] if v is not None]
+                versions_to_load = ([version] if version else []) + versions_web
                 
                 self._build_faiss_index(versions_to_load, cache_key)
 
@@ -522,14 +532,13 @@ class DBVectorStore:
 
             qv = self.embed([query])
             D, I = self._faiss_index.search(qv, min(k, self._faiss_index.ntotal))
-        canonical = version if version is not None else version_web
         results = []
         for score, idx in zip(D[0], I[0]):
             if idx == -1:
                 continue
             chunk_pk = self._faiss_chunk_ids[idx]
             try:
-                chunk = DocumentChunk.objects.select_related("document").get(pk=chunk_pk)
+                chunk = DocumentChunk.objects.select_related("document", "version").get(pk=chunk_pk)
                 results.append((float(score), {
                     "chunk_pk":    chunk.pk,
                     "source_id":   chunk.document.drive_file_id,
@@ -539,7 +548,7 @@ class DBVectorStore:
                     "source_type": chunk.document.source_type,
                     "chunk":       chunk.chunk_index,
                     "text":        chunk.text,
-                    "version":     canonical.version_number,
+                    "version":     chunk.version.version_number,
                 }))
             except DocumentChunk.DoesNotExist:
                 pass
@@ -596,20 +605,19 @@ class DBVectorStore:
         """
         from pgvector.django import CosineDistance  # type: ignore
 
-        version     = self._get_target_version(version_id)
-        version_web = self._get_target_version_web()
+        version      = self._get_target_version(version_id)
+        versions_web = self._get_target_versions_web()
 
-        if version is None and version_web is None:
+        if version is None and not versions_web:
             return []
 
-        active_versions = [v for v in [version, version_web] if v is not None]
-        canonical = version if version is not None else version_web
+        active_versions = ([version] if version else []) + versions_web
         qv = self.embed([query])[0].tolist()
 
         qs = (
             DocumentChunk.objects
             .filter(version__in=active_versions)
-            .select_related("document")
+            .select_related("document", "version")
             .annotate(distance=CosineDistance("embedding", qv))
             .order_by("distance")[:k]
         )
@@ -626,7 +634,7 @@ class DBVectorStore:
                 "source_type": chunk.document.source_type,
                 "chunk":       chunk.chunk_index,
                 "text":        chunk.text,
-                "version":     canonical.version_number,
+                "version":     chunk.version.version_number,
             }))
         return results
 
@@ -739,6 +747,7 @@ def get_db_store(folder_id: Optional[str] = None) -> DBVectorStore:
     Falls back to settings.GDRIVE_DEFAULT_FOLDER_ID if not specified.
     """
     fid = folder_id or getattr(settings, "GDRIVE_DEFAULT_FOLDER_ID", "default")
+    print("Folder ID in get_db_store:", fid) #############################################
     global _db_store_cache
     if fid not in _db_store_cache:
         with _db_store_lock:
