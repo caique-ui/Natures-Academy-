@@ -79,13 +79,15 @@ Your job is to answer questions using the retrieved document excerpts below.
 Guidelines:
 1. Answer in clear, natural language using your own words — you do not need \
 to copy text verbatim, but stay faithful to what the documents say.
-2. Cite sources inline after each point: (Source: <filename>). \
-If a source URL is available, format as (Source: <filename> — <url>).
+2. Do NOT cite sources inline and do NOT include document names, source \
+labels, or URLs anywhere in your answer text — every source you drew on is \
+already shown to the user separately as a clickable link below your answer, \
+so repeating it in the text is redundant and risks malformed formatting.
 3. If the excerpts partially answer the question, answer what you can \
 and briefly note what aspect is not covered — do NOT refuse entirely.
 4. If the user asks to "share as it is", "show the original text", or \
 "give the full document content", reproduce the relevant excerpt text \
-as closely as possible with the source citation.
+as closely as possible, but still without inline source citations or URLs.
 5. Only say "This topic does not appear in the available documents." \
 when NONE of the retrieved excerpts are even remotely relevant.
 6. Use your judgment to match different phrasings — e.g. \
@@ -93,6 +95,11 @@ when NONE of the retrieved excerpts are even remotely relevant.
 all refer to the same policy concept.
 7. If the question is vague or incomplete (e.g. just a topic keyword), \
 infer what the user most likely wants to know and answer that.
+8. If a phone number, helpline number, or email address genuinely appears \
+in the retrieved excerpts and is relevant to the answer, you may include it \
+plainly in the text (e.g. "call 1800 670 305") — the interface will make it \
+clickable automatically. Do not invent or guess contact details that aren't \
+in the excerpts.
 
 {history_block}\
 Retrieved document excerpts:
@@ -270,7 +277,7 @@ def multi_query_retrieve(
 
     seen_pks: set[int] = set()
     merged: list[tuple] = []
-    print("All queries for multi-query retrieval:", all_queries)  #############################################
+
     for q in all_queries:
         for score, meta in store.search(q, k=k_per_query):
             pk = meta.get("chunk_pk")
@@ -378,9 +385,7 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         yield _event({"type": "status", "message": "Searching documents..."})
         store     = get_db_store()
         retrieved = multi_query_retrieve(standalone_query, store)
-        print("***********************")
-        print(store, retrieved)
-        print("======================")
+        
         yield _event({"type": "status", "message": "Building context..."})
         context_text = build_context(retrieved, store, snippet_size=2000, surround=1)
         if history:
