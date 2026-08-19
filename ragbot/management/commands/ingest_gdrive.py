@@ -113,6 +113,8 @@ class Command(BaseCommand):
                         "source_id":   meta["id"],
                         "source_name": meta["name"],
                         "mime":        meta["mime"],
+                        "source_url":  f"https://drive.google.com/file/d/{meta['id']}/view",
+                        "source_type": "drive",
                         "chunk":       i,
                         "text":        c,
                     }
