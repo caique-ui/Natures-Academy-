@@ -267,7 +267,7 @@ def multi_query_retrieve(
     standalone_query: str,
     store,
     k_per_query: int = 6,
-    max_total: int = 12,
+    max_total: int = 20,
     n_sub_queries: int = 3,
 ) -> list[tuple]:
     """
