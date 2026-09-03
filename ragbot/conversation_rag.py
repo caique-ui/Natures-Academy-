@@ -140,7 +140,7 @@ def rewrite_query(question: str, history: list[dict]) -> str:
         resp = client.chat.completions.create(
             model=settings.OPENAI_CHAT_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
+            temperature=0.3,
             max_tokens=200,
         )
         rewritten = resp.choices[0].message.content.strip()
@@ -278,7 +278,7 @@ def multi_query_retrieve(
     store,
     k_per_query: int = 6,
     k_original: int = 10,
-    max_total: int = 20,
+    max_total: int = 12,
     n_sub_queries: int = 3,
 ) -> list[tuple]:
     """
