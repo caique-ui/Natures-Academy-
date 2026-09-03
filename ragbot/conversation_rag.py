@@ -414,6 +414,8 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
         yield _event({"type": "status", "message": "Generating response..."})
         yield _event({"type": "clear_status"})
 
+        print(prompt_content)
+
         client = OpenAI()
         stream = client.chat.completions.create(
             model=settings.OPENAI_CHAT_MODEL,
