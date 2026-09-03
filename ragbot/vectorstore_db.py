@@ -511,7 +511,8 @@ class DBVectorStore:
         version_id: Optional[int],
     ) -> List[Tuple[float, Dict]]:
         """Load embeddings into a local FAISS index, then search."""
-        version      = self._get_target_version(version_id)
+        version = None
+        #version      = self._get_target_version(version_id)
         versions_web = self._get_target_versions_web()
         if version is None and not versions_web:
             print("No active version found.")
