@@ -461,18 +461,18 @@ class DBVectorStore:
         # Fallback: if nothing passes threshold, widen to top-3 results
         # regardless of score so the LLM always has something to work with.
         # The prompt instructs it to say "not available" only when truly irrelevant.
+        
+        # if not results:
+        #     if _use_pgvector():
+        #         raw = self._search_pgvector(query, 3, version_id)
+        #     else:
+        #         raw = self._search_faiss(query, 3, version_id)
+        #     results = raw[:3]
+        #     if results:
+        #         print(f"search: threshold fallback triggered, best score={results[0][0]:.3f}")
 
-        if not results:
-            if _use_pgvector():
-                raw = self._search_pgvector(query, 3, version_id)
-            else:
-                raw = self._search_faiss(query, 3, version_id)
-            results = raw[:3]
-            if results:
-                print(f"search: threshold fallback triggered, best score={results[0][0]:.3f}")
-
-        elapsed = time.time() - t0
-        print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
+        # elapsed = time.time() - t0
+        # print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
         return results
 
     def _get_target_version(self, version_id: Optional[int]) -> Optional[IndexVersion]:
