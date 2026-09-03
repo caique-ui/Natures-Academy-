@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 import faiss
 import numpy as np
+import redis
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
@@ -734,37 +735,139 @@ class DBVectorStore:
 
 
 # ---------------------------------------------------------------------------
+# cross-process cache invalidation
+# ---------------------------------------------------------------------------
+#
+# _db_store_cache below is a plain in-process dict. Apache/mod_wsgi (and any
+# multi-worker WSGI setup) runs several separate OS processes, each with its
+# own Python memory — so each worker builds and caches its OWN DBVectorStore
+# (and its own FAISS index) independently. Calling invalidate_db_store_cache()
+# from a Celery task or a `manage.py ingest_gdrive` run only clears the dict
+# in THAT process; every Apache worker process keeps serving whatever it
+# already had cached until it happens to restart. That's why the same
+# question could get a fully-answered, well-sourced reply from one worker
+# and a stale "not found" reply from another — they were searching different
+# in-memory snapshots of the index.
+#
+# Fix: keep a small "generation" counter per folder_id in Redis (reusing the
+# same Redis instance Celery already uses, under its own key namespace so it
+# never collides with Celery's own keys). Every get_db_store() call checks
+# this counter; if it's moved since this process last built its local
+# DBVectorStore for that folder_id, the process discards its stale copy and
+# rebuilds — so a reindex propagates to every worker process within one
+# request of it happening, not just the process that ran the reindex.
+
+_redis_client: Optional["redis.Redis"] = None
+_redis_client_lock = threading.Lock()
+
+
+def _get_redis_client() -> "redis.Redis":
+    global _redis_client
+    if _redis_client is None:
+        with _redis_client_lock:
+            if _redis_client is None:
+                redis_url = getattr(settings, "CELERY_BROKER_URL", "redis://localhost:6379/0")
+                _redis_client = redis.Redis.from_url(redis_url)
+    return _redis_client
+
+
+def _generation_redis_key(folder_id: str) -> str:
+    return f"ragbot:vectorstore_gen:{folder_id}"
+
+
+def _bump_generation(folder_id: str) -> None:
+    """Increment the shared generation counter — signals every process."""
+    try:
+        _get_redis_client().incr(_generation_redis_key(folder_id))
+    except Exception:
+        logger.exception(f"Failed to bump vectorstore generation for folder_id={folder_id}")
+
+
+def _current_generation(folder_id: str) -> int:
+    """
+    Read the shared generation counter. Fails safe: if Redis is briefly
+    unreachable, returns 0 so this process just keeps its existing local
+    cache rather than crashing the chat request.
+    """
+    try:
+        val = _get_redis_client().get(_generation_redis_key(folder_id))
+        return int(val) if val is not None else 0
+    except Exception:
+        logger.exception(f"Failed to read vectorstore generation for folder_id={folder_id}")
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # singleton factory
 # ---------------------------------------------------------------------------
 
 _db_store_cache: Dict[str, DBVectorStore] = {}
+_db_store_generation: Dict[str, int] = {}   # generation this PROCESS last built for each folder_id
 _db_store_lock = threading.Lock()
 
 
 def get_db_store(folder_id: Optional[str] = None) -> DBVectorStore:
     """
-    Return a thread-safe singleton DBVectorStore for the given folder_id.
+    Return a thread-safe singleton DBVectorStore for the given folder_id,
+    automatically rebuilding it in THIS process if another process has
+    bumped the shared Redis generation counter since this process last
+    built it (see cross-process cache invalidation note above).
     Falls back to settings.GDRIVE_DEFAULT_FOLDER_ID if not specified.
     """
     fid = folder_id or getattr(settings, "GDRIVE_DEFAULT_FOLDER_ID", "default")
-    print("Folder ID in get_db_store:", fid) #############################################
-    global _db_store_cache
-    if fid not in _db_store_cache:
+    current_gen = _current_generation(fid)
+
+    global _db_store_cache, _db_store_generation
+    if fid not in _db_store_cache or _db_store_generation.get(fid) != current_gen:
         with _db_store_lock:
-            if fid not in _db_store_cache:
+            if fid not in _db_store_cache or _db_store_generation.get(fid) != current_gen:
                 _db_store_cache[fid] = DBVectorStore(
                     folder_id=fid,
                     embed_model=settings.OPENAI_EMBED_MODEL,
                 )
+                _db_store_generation[fid] = current_gen
     return _db_store_cache[fid]
 
 
 def invalidate_db_store_cache(folder_id: Optional[str] = None):
-    """Call after activating a new version so searches reload from DB."""
-    global _db_store_cache
+    """
+    Call after activating a new version so ALL processes reload from DB —
+    not just the one that called this. Clears this process's local cache
+    immediately, AND bumps the shared Redis generation counter so every
+    other Apache/Celery worker process discards its own stale in-memory
+    copy the next time it calls get_db_store(), regardless of which
+    process the reindex actually ran in.
+
+    IMPORTANT: the live chat path (conversation_rag.py) always calls
+    get_db_store() with NO folder_id, so it always resolves to ONE shared
+    store cached under GDRIVE_DEFAULT_FOLDER_ID — and that single store's
+    search() merges in every active web IndexVersion internally, no matter
+    which web folder_id they belong to. So invalidating a web source's own
+    folder_id key isn't sufficient by itself: we also bump the default
+    folder_id's generation whenever a non-default (e.g. web) folder_id is
+    invalidated, since that's the key the chat path's get_db_store() call
+    actually checks.
+    """
+    global _db_store_cache, _db_store_generation
+    default_fid = getattr(settings, "GDRIVE_DEFAULT_FOLDER_ID", "default")
+
     with _db_store_lock:
         if folder_id:
             _db_store_cache.pop(folder_id, None)
+            _db_store_generation.pop(folder_id, None)
+            _bump_generation(folder_id)
+
+            if folder_id != default_fid:
+                # A web (or any non-default) source changed — the shared
+                # chat-facing store also needs to be rebuilt everywhere,
+                # since it's the one that merges web versions into search.
+                _db_store_cache.pop(default_fid, None)
+                _db_store_generation.pop(default_fid, None)
+                _bump_generation(default_fid)
         else:
+            affected_fids = set(_db_store_cache.keys()) | {default_fid}
             _db_store_cache.clear()
+            _db_store_generation.clear()
+            for fid in affected_fids:
+                _bump_generation(fid)
     gc.collect()
