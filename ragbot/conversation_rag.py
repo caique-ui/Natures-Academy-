@@ -158,7 +158,17 @@ def rewrite_query(question: str, history: list[dict]) -> str:
 def expand_to_sub_queries(question: str, n: int = 3) -> list[str]:
     """
     Generate up to n additional search queries covering different facets of
-    the question.  The original question is always the first item.
+    the question. The original question is always the first item.
+
+    Temperature is 0.0 (down from 0.3) to reduce run-to-run variance in
+    the generated phrasings — though note this only reduces, not
+    eliminates, variance: LLM completions aren't perfectly deterministic
+    even at temperature 0. The main defense against that residual
+    variance actually affecting answer consistency lives in
+    multi_query_retrieve() below: the literal original question is always
+    searched with a larger k than these generated sub-queries, so the
+    "core" retrieved content stays anchored to something deterministic
+    regardless of which sub-query phrasings get generated on a given run.
 
     Falls back gracefully to [question] on any error.
     """
@@ -169,7 +179,7 @@ def expand_to_sub_queries(question: str, n: int = 3) -> list[str]:
             messages=[{"role": "user", "content": SUB_QUERY_PROMPT.format(
                 question=question, n=n,
             )}],
-            temperature=0.3,
+            temperature=0.0,
             max_tokens=300,
         )
         raw = resp.choices[0].message.content.strip().strip("`").strip()
@@ -267,6 +277,7 @@ def multi_query_retrieve(
     standalone_query: str,
     store,
     k_per_query: int = 6,
+    k_original: int = 10,
     max_total: int = 20,
     n_sub_queries: int = 3,
 ) -> list[tuple]:
@@ -274,11 +285,34 @@ def multi_query_retrieve(
     Run the standalone query plus sub-queries, deduplicate by chunk_pk,
     and return up to max_total results sorted by score descending.
 
+    The ORIGINAL (literal, rewritten) question is searched with a larger
+    k (k_original=10) than the generated sub-queries (k_per_query=6).
+    Combined with the dedup below — which keeps whichever score was seen
+    FIRST, and the original question is always processed first — any
+    chunk the original question finds keeps ITS score even if a later
+    sub-query also happens to find it.
+
+    This makes the original question's own results the stable "core" of
+    every answer: they depend only on the user's actual words plus the
+    (unchanging) document embeddings, never on which sub-query phrasings
+    an LLM happened to generate this run. Sub-queries still contribute
+    genuinely useful additional chunks the literal wording might miss —
+    that supplementary layer can vary a little run to run, which is fine
+    (different words, same underlying facts); the core substance of the
+    answer shouldn't, since it's anchored to something deterministic.
+
+    max_total raised from 12 -> 20: up to 4 queries run (original +
+    n_sub_queries) at k_original/k_per_query each, so up to ~28 unique
+    candidates can be retrieved before this cap — enough room for
+    multiple genuinely relevant documents to survive together rather
+    than competing for very few slots.
+
     Parameters
     ----------
     standalone_query : already-rewritten question
     store            : DBVectorStore instance
-    k_per_query      : chunks retrieved per query
+    k_per_query      : chunks retrieved per generated sub-query
+    k_original       : chunks retrieved for the literal original question
     max_total        : cap on chunks passed to the LLM
     n_sub_queries    : number of sub-queries to generate
     """
@@ -287,8 +321,9 @@ def multi_query_retrieve(
     seen_pks: set[int] = set()
     merged: list[tuple] = []
 
-    for q in all_queries:
-        for score, meta in store.search(q, k=k_per_query):
+    for i, q in enumerate(all_queries):
+        k = k_original if i == 0 else k_per_query
+        for score, meta in store.search(q, k=k):
             pk = meta.get("chunk_pk")
             if pk not in seen_pks:
                 seen_pks.add(pk)
@@ -413,8 +448,6 @@ def conversational_rag_stream(question: str, conversation: "Conversation"):
 
         yield _event({"type": "status", "message": "Generating response..."})
         yield _event({"type": "clear_status"})
-
-        print(prompt_content)
 
         client = OpenAI()
         stream = client.chat.completions.create(
