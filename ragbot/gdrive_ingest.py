@@ -300,6 +300,39 @@ def iter_drive_files(folder_id: str):
     yield from walk(folder_id)
 
 
+def _extract_pdf_page_links(page) -> list:
+    """
+    Extract external hyperlink URIs (PDF "Link" annotations) from a page.
+
+    page.extract_text() only reads the visible TEXT LAYER of a PDF — it
+    never sees hyperlink annotations. That means a link on text like
+    "Raising Children Network" (as opposed to a raw URL printed on the
+    page) is completely invisible to the rest of the pipeline: it never
+    gets embedded, retrieved, or seen by the chat model, no matter how
+    relevant it is. This recovers those URIs directly from each page's
+    annotation objects so they can be appended to the extracted text and
+    flow into embeddings/retrieval like any other content.
+    """
+    links = []
+    try:
+        annots = page.get("/Annots")
+        if not annots:
+            return links
+        for annot_ref in annots:
+            annot = annot_ref.get_object()
+            if annot.get("/Subtype") != "/Link":
+                continue
+            action = annot.get("/A")
+            if not action:
+                continue
+            uri = action.get("/URI")
+            if uri:
+                links.append(str(uri))
+    except Exception:
+        pass
+    return links
+
+
 def fetch_text_for_file(file: dict) -> Tuple[str, dict]:
     """Returns (text, metadata) for a given Drive file with retry logic."""
     try:
@@ -350,9 +383,28 @@ def fetch_text_for_file(file: dict) -> Tuple[str, dict]:
                 data = io.BytesIO(buf.getvalue())
                 try:
                     reader = PdfReader(data)
-                    pages = [page.extract_text() or "" for page in reader.pages]
+                    pages = []
+                    for page in reader.pages:
+                        page_text = page.extract_text() or ""
+                        page_links = _extract_pdf_page_links(page)
+                        if page_links:
+                            # De-dupe while preserving order, then append as
+                            # a clearly labeled footer so the chat model can
+                            # see and (when relevant) surface these links —
+                            # they'd otherwise never enter the text at all.
+                            unique_links = list(dict.fromkeys(page_links))
+                            page_text += (
+                                "\n\nReferenced links on this page: "
+                                + ", ".join(unique_links)
+                            )
+                        pages.append(page_text)
                     text = "\n\n".join(pages)
                 except Exception:
+                    # pdfminer fallback: link-annotation extraction isn't
+                    # implemented for this path (rare fallback case — pypdf
+                    # covers the vast majority of PDFs). Text-layer content
+                    # still extracts fine; only embedded link annotations
+                    # would be missed for a PDF that hits this fallback.
                     data.seek(0)
                     text = pdf_extract(data)
                 return text, meta
