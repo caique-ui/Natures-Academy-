@@ -173,6 +173,7 @@ CELERY_BEAT_SCHEDULER    = "django_celery_beat.schedulers:DatabaseScheduler"
 
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True   # anonymous sessions die with the tab
 SESSION_COOKIE_AGE = 60 * 60 * 24 * 7   # 7 days for authenticated users
+OPENAI_EMBED_TPM_BUDGET = 900_000  # tune to your actual tier limit
 
 LOGIN_URL           = "/auth/login/"
 LOGIN_REDIRECT_URL  = "/"

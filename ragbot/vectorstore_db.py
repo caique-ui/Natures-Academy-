@@ -14,7 +14,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from .models import DocumentChunk, IndexVersion, SourceDocument
 
@@ -413,10 +413,7 @@ class DBVectorStore:
                     uncached_positions.append(j)
 
             if uncached_texts:
-                resp = self.client.embeddings.create(
-                    model=self.embed_model, input=uncached_texts
-                )
-                new_vecs = np.array([d.embedding for d in resp.data], dtype="float32")
+                new_vecs = self._embed_with_retry(uncached_texts)
                 faiss.normalize_L2(new_vecs)
 
                 for pos, vec in zip(uncached_positions, new_vecs):
@@ -424,7 +421,7 @@ class DBVectorStore:
                     if len(self._embedding_cache) < self._cache_max_size:
                         self._embedding_cache[str(hash(batch[pos]))] = vec.copy()
 
-                del resp, new_vecs
+                del new_vecs
 
             all_vectors.append(batch_vectors)
 
@@ -432,6 +429,71 @@ class DBVectorStore:
                 gc.collect()
 
         return np.vstack(all_vectors) if all_vectors else np.array([]).reshape(0, self.dim)
+
+    def _embed_with_retry(self, texts: List[str], max_retries: int = 6) -> np.ndarray:
+        """Call the OpenAI embeddings endpoint with exponential backoff on
+        rate limits and transient connection errors.
+
+        Without this, a single 429 (e.g. from a large sitemap crawl pushing
+        many chunks through in a short window) propagates all the way up
+        through add_texts -> handle_batch -> _maybe_flush -> the Celery
+        task, which then retries the ENTIRE task/URL from scratch. Retrying
+        just the failed embedding call in-place is far cheaper and avoids
+        redoing work that already succeeded (fetching, chunking, etc).
+        """
+        attempt = 0
+        while True:
+            try:
+                _throttle_for_tpm_budget(sum(_estimate_tokens(t) for t in texts))
+                resp = self.client.embeddings.create(
+                    model=self.embed_model, input=texts
+                )
+                return np.array([d.embedding for d in resp.data], dtype="float32")
+            except RateLimitError as exc:
+                attempt += 1
+                if attempt > max_retries:
+                    logger.error(
+                        "OpenAI embeddings rate limit persisted after %d "
+                        "retries; giving up on this batch of %d texts.",
+                        max_retries, len(texts),
+                    )
+                    raise
+                wait_seconds = self._parse_retry_after_seconds(exc) or min(2 ** attempt, 60)
+                logger.warning(
+                    "OpenAI embeddings rate limited (attempt %d/%d); "
+                    "sleeping %.2fs before retry.",
+                    attempt, max_retries, wait_seconds,
+                )
+                time.sleep(wait_seconds)
+            except (APIConnectionError, APITimeoutError) as exc:
+                attempt += 1
+                if attempt > max_retries:
+                    logger.error(
+                        "OpenAI embeddings connection error persisted after "
+                        "%d retries; giving up on this batch of %d texts.",
+                        max_retries, len(texts),
+                    )
+                    raise
+                wait_seconds = min(2 ** attempt, 30)
+                logger.warning(
+                    "OpenAI embeddings connection issue (attempt %d/%d): "
+                    "%s; sleeping %.2fs before retry.",
+                    attempt, max_retries, exc, wait_seconds,
+                )
+                time.sleep(wait_seconds)
+
+    @staticmethod
+    def _parse_retry_after_seconds(exc: Exception) -> Optional[float]:
+        """Best-effort extraction of the "Please try again in Xms/Xs" hint
+        OpenAI includes in the RateLimitError message, so we wait the
+        actual suggested duration instead of a blind exponential guess.
+        """
+        match = re.search(r"try again in ([\d.]+)\s*(ms|s)\b", str(exc))
+        if not match:
+            return None
+        value, unit = match.groups()
+        value = float(value)
+        return value / 1000.0 if unit == "ms" else value
 
     # ------------------------------------------------------------------
     # search
@@ -461,18 +523,17 @@ class DBVectorStore:
         # Fallback: if nothing passes threshold, widen to top-3 results
         # regardless of score so the LLM always has something to work with.
         # The prompt instructs it to say "not available" only when truly irrelevant.
-        
-        # if not results:
-        #     if _use_pgvector():
-        #         raw = self._search_pgvector(query, 3, version_id)
-        #     else:
-        #         raw = self._search_faiss(query, 3, version_id)
-        #     results = raw[:3]
-        #     if results:
-        #         print(f"search: threshold fallback triggered, best score={results[0][0]:.3f}")
+        if not results:
+            if _use_pgvector():
+                raw = self._search_pgvector(query, 3, version_id)
+            else:
+                raw = self._search_faiss(query, 3, version_id)
+            results = raw[:3]
+            if results:
+                print(f"search: threshold fallback triggered, best score={results[0][0]:.3f}")
 
-        # elapsed = time.time() - t0
-        # print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
+        elapsed = time.time() - t0
+        print(f"search({query!r:.50}, k={k}) → {len(results)} results in {elapsed:.3f}s")
         return results
 
     def _get_target_version(self, version_id: Optional[int]) -> Optional[IndexVersion]:
@@ -512,7 +573,8 @@ class DBVectorStore:
         version_id: Optional[int],
     ) -> List[Tuple[float, Dict]]:
         """Load embeddings into a local FAISS index, then search."""
-        version      = self._get_target_version(version_id)
+        version = None
+        #version      = self._get_target_version(version_id)
         versions_web = self._get_target_versions_web()
         if version is None and not versions_web:
             print("No active version found.")
@@ -770,6 +832,88 @@ def _get_redis_client() -> "redis.Redis":
                 redis_url = getattr(settings, "CELERY_BROKER_URL", "redis://localhost:6379/0")
                 _redis_client = redis.Redis.from_url(redis_url)
     return _redis_client
+
+
+# ------------------------------------------------------------------
+# Proactive embeddings TPM (tokens-per-minute) throttle
+# ------------------------------------------------------------------
+# Reuses the same Redis instance as the generation counter above, under
+# its own key namespace, so the budget is shared across ALL Celery worker
+# processes/nodes -- not just the process handling the current task. This
+# is what actually lets us pace requests *before* hitting a 429, since a
+# per-process counter would miss usage from sibling workers embedding
+# concurrently.
+#
+# Set OPENAI_EMBED_TPM_BUDGET in settings.py to match your OpenAI tier's
+# real TPM limit for the embedding model, with headroom for other
+# consumers of the same quota (chat completions, other jobs, etc). This
+# defaults to 900,000 -- a 10% safety margin under the 1,000,000 TPM
+# limit seen in the rate-limit traceback -- but you should tune it to
+# your actual account limit and workload mix.
+_EMBED_TPM_BUDGET = getattr(settings, "OPENAI_EMBED_TPM_BUDGET", 900_000)
+_EMBED_TPM_REDIS_PREFIX = "ragbot:embed_tpm:"
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars/token for English) used only to pace
+    requests proactively. It doesn't need to be exact -- just close enough,
+    on the conservative side, to keep requests under the TPM ceiling."""
+    return max(1, len(text) // 4)
+
+
+def _throttle_for_tpm_budget(token_count: int) -> None:
+    """Block until sending `token_count` more tokens this minute would stay
+    within _EMBED_TPM_BUDGET, using a Redis-backed fixed 60s bucket shared
+    across all worker processes.
+
+    Fixed windows can slightly under/over-count right at a minute
+    boundary (a burst at :59 and another at :01 could combine to exceed
+    the real limit briefly), but combined with the safety-margin budget
+    and _embed_with_retry's backoff as a fallback, that's an acceptable
+    tradeoff for a large reduction in how often we actually hit 429s.
+    Fails open (proceeds without throttling) if Redis is unavailable, so
+    a Redis hiccup degrades to today's un-throttled behavior rather than
+    blocking ingestion entirely.
+    """
+    client = _get_redis_client()
+
+    while True:
+        bucket = int(time.time() // 60)
+        key = f"{_EMBED_TPM_REDIS_PREFIX}{bucket}"
+
+        try:
+            used = int(client.get(key) or 0)
+        except Exception:
+            logger.warning(
+                "Could not read embedding TPM budget from Redis; "
+                "proceeding without proactive throttling."
+            )
+            return
+
+        if used + token_count <= _EMBED_TPM_BUDGET:
+            try:
+                pipe = client.pipeline()
+                pipe.incrby(key, token_count)
+                pipe.expire(key, 120)
+                pipe.execute()
+            except Exception:
+                logger.warning(
+                    "Could not record embedding TPM usage in Redis; "
+                    "proceeding without recording this batch."
+                )
+            return
+
+        seconds_into_bucket = time.time() % 60
+        wait_seconds = max(0.5, 60 - seconds_into_bucket + 0.1)
+        logger.info(
+            "Embedding TPM budget (%d) would be exceeded (%d used + %d "
+            "requested this minute); pausing before retrying.",
+            _EMBED_TPM_BUDGET, used, token_count,
+        )
+        # Re-check periodically rather than sleeping the full remainder in
+        # one go, in case usage frees up sooner (e.g. bucket math edge
+        # cases) or the process needs to respond to a shutdown signal.
+        time.sleep(min(wait_seconds, 10))
 
 
 def _generation_redis_key(folder_id: str) -> str:
